@@ -219,6 +219,7 @@ function FlowNode({
   secondaryValue,
   active,
   icon,
+  pulse,
 }: {
   x: number;
   y: number;
@@ -228,10 +229,59 @@ function FlowNode({
   secondaryValue?: string;
   active: boolean;
   icon: string;
+  pulse?: boolean;
 }) {
   const dim = active ? 1 : 0.4;
   return (
     <g opacity={dim}>
+      {/* Pulsing glow ring when pulse=true (e.g. battery charging) */}
+      {pulse && (
+        <circle cx={x} cy={y} r="30" fill="none" stroke={color} strokeWidth="2" opacity="0">
+          <animate
+            attributeName="r"
+            values="28;42"
+            dur="2s"
+            repeatCount="indefinite"
+          />
+          <animate
+            attributeName="opacity"
+            values="0.5;0"
+            dur="2s"
+            repeatCount="indefinite"
+          />
+          <animate
+            attributeName="stroke-width"
+            values="2;0.5"
+            dur="2s"
+            repeatCount="indefinite"
+          />
+        </circle>
+      )}
+      {pulse && (
+        <circle cx={x} cy={y} r="30" fill="none" stroke={color} strokeWidth="2" opacity="0">
+          <animate
+            attributeName="r"
+            values="28;42"
+            dur="2s"
+            repeatCount="indefinite"
+            begin="1s"
+          />
+          <animate
+            attributeName="opacity"
+            values="0.5;0"
+            dur="2s"
+            repeatCount="indefinite"
+            begin="1s"
+          />
+          <animate
+            attributeName="stroke-width"
+            values="2;0.5"
+            dur="2s"
+            repeatCount="indefinite"
+            begin="1s"
+          />
+        </circle>
+      )}
       {/* Outer glow when active */}
       {active && (
         <circle cx={x} cy={y} r="30" fill={color} opacity="0.06" filter="url(#nodeGlow)" />
@@ -244,7 +294,17 @@ function FlowNode({
         fill="rgba(15,23,42,0.9)"
         stroke={active ? color : "rgba(255,255,255,0.08)"}
         strokeWidth={active ? 1.5 : 1}
-      />
+      >
+        {/* Gentle border brightness pulse when charging */}
+        {pulse && (
+          <animate
+            attributeName="stroke-opacity"
+            values="1;0.4;1"
+            dur="1.5s"
+            repeatCount="indefinite"
+          />
+        )}
+      </circle>
       {/* Icon emoji/text */}
       <text
         x={x}
@@ -390,6 +450,7 @@ export function EnergyFlowDiagram({
           d={PATH_GRID}
           active={gridActive}
           color="#38bdf8"
+          reverse={true}
           power={gridActive ? fmtKw(acInputPower) : undefined}
           labelOffset={{ x: CX + 62, y: CY + 22 }}
         />
@@ -422,6 +483,7 @@ export function EnergyFlowDiagram({
           secondaryValue={battLabel}
           active={batteryActive || soc > 0}
           icon="🔋"
+          pulse={batteryCharging}
         />
         <FlowNode
           x={GRID.x}

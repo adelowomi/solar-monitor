@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import {
   Sun,
   BatteryCharging,
@@ -13,7 +13,8 @@ import {
   Settings,
 } from "lucide-react";
 import type { Session, EnergyFlowData, Station, Device, UserSettings } from "../api/types";
-import { listStations, listDevices, getEnergyFlow } from "../api/endpoints";
+import { listStations, listDevices, getEnergyFlow, getDailySolarHistory } from "../api/endpoints";
+import type { SolarTimePoint } from "../api/endpoints";
 import { ApiError } from "../api/client";
 import { usePolling } from "../hooks/usePolling";
 import { useNotifications } from "../hooks/useNotifications";
@@ -26,6 +27,8 @@ import { PowerCard } from "./PowerCard";
 import { HouseLoadCard } from "./HouseLoadCard";
 import { SecondaryStats } from "./SecondaryStats";
 import { SettingsSheet } from "./SettingsSheet";
+import { PowerHistory } from "./PowerHistory";
+import { useLocalHistory } from "../hooks/useLocalHistory";
 
 const POLL_INTERVAL = 30_000;
 
@@ -41,6 +44,9 @@ export function Dashboard({ session, onLogout, settings, onUpdateSettings }: Das
   const [device, setDevice] = useState<Device | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { permission, enabled, toggle, requestPermission, notify } = useNotifications();
+  const { history: localHistory, record: recordHistory } = useLocalHistory();
+  const [solarHistory, setSolarHistory] = useState<SolarTimePoint[]>([]);
+  const [solarLoading, setSolarLoading] = useState(false);
 
   const prevGridOn = useRef<boolean | null>(null);
   const prevSoc = useRef<number | null>(null);
@@ -79,6 +85,42 @@ export function Dashboard({ session, onLogout, settings, onUpdateSettings }: Das
     fetchFlow,
     POLL_INTERVAL
   );
+
+  // Fetch solar history when device is loaded
+  useEffect(() => {
+    if (!device) return;
+    let cancelled = false;
+    setSolarLoading(true);
+    getDailySolarHistory(session.token, device.id)
+      .then((pts) => {
+        if (!cancelled) setSolarHistory(pts);
+      })
+      .catch(() => {
+        /* silently ignore */
+      })
+      .finally(() => {
+        if (!cancelled) setSolarLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [device, session.token]);
+
+  // Record local power history on each poll
+  const derivedForHistory = useMemo(() => {
+    if (!flow) return null;
+    const st = deriveState(flow.deviceAttributeState.fields, settings);
+    return {
+      load: st.loadPower,
+      battery: st.batteryPower,
+      grid: st.acInputPower,
+      solar: st.pvPower,
+    };
+  }, [flow, settings]);
+
+  useEffect(() => {
+    if (derivedForHistory) recordHistory(derivedForHistory);
+  }, [derivedForHistory, recordHistory]);
 
   // Alert transitions
   useEffect(() => {
@@ -303,6 +345,12 @@ export function Dashboard({ session, onLogout, settings, onUpdateSettings }: Das
           todayConsumed={s.todayLoadConsumed}
           todayBattDischarge={s.todayBattDischarge}
           batteryDischarging={s.batteryDischarging}
+        />
+
+        <PowerHistory
+          solarHistory={solarHistory}
+          solarLoading={solarLoading}
+          localHistory={localHistory}
         />
 
         <SecondaryStats
