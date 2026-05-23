@@ -1,36 +1,9 @@
-import type { FieldMap, DerivedSummary, UserSettings } from "../api/types";
+import type { CurrentReadingDto } from "../api/sunhouse";
+import type { UserSettings, DerivedSummary } from "../api/types";
 
-function fieldValue(fields: FieldMap, key: string): number {
-  const f = fields[key];
-  if (!f || f.value == null) return 0;
-  return typeof f.value === "number" ? f.value : parseFloat(f.value) || 0;
-}
-
-function fieldDisplay(fields: FieldMap, key: string): string {
-  return fields[key]?.valueDisplay ?? "\u2014";
-}
-
-/**
- * Estimate remaining battery hours using actual DC measurements when available.
- * Uses V × A from the inverter for a more accurate discharge rate than the
- * reported batteryPower field, which can lag or be rounded.
- */
-export function estimateBatteryHours(
-  socPct: number,
-  dischargeKw: number,
-  capacityKwh: number,
-  batteryVoltage?: number,
-  dischargeCurrent?: number
-): number | null {
-  // Prefer actual DC power (V × A) when both readings are available
-  let actualDischargeKw = dischargeKw;
-  if (batteryVoltage && batteryVoltage > 0 && dischargeCurrent && dischargeCurrent > 0) {
-    actualDischargeKw = (batteryVoltage * dischargeCurrent) / 1000;
-  }
-
-  if (actualDischargeKw <= 0.01) return null;
-  const usableKwh = capacityKwh * (socPct / 100);
-  return usableKwh / actualDischargeKw;
+export interface FlowInfo {
+  flowDirection: number | null;
+  isLight: boolean;
 }
 
 export interface DerivedState {
@@ -51,20 +24,39 @@ export interface DerivedState {
   todayPvGen: number;
   todayLoadConsumed: number;
   todayBattDischarge: number;
+  todayGridConsumed: number;
   loadPercentage: number;
   batteryHoursLeft: number | null;
+  pvPanelFlow: FlowInfo;
+  gridFlow: FlowInfo;
+  batteryFlow: FlowInfo;
+  loadFlow: FlowInfo;
 }
 
-export function deriveState(fields: FieldMap, settings: UserSettings): DerivedState {
-  const soc = fieldValue(fields, "batterySOC");
-  const batteryPower = fieldValue(fields, "batteryPower");
-  const batteryDischarging = batteryPower < -0.01;
-  const batteryCharging = batteryPower > 0.01;
-  const pvPower = fieldValue(fields, "generationPower");
-  const loadPower = fieldValue(fields, "totalActivePower");
-  const acInputVoltage = fieldValue(fields, "acInputVoltage");
-  const lineConn = fields["lineConnectionStatus"]?.value;
-  const gridOn = acInputVoltage > 50 && lineConn === "1";
+const n = (v: number | undefined | null): number => v ?? 0;
+const b = (v: boolean | undefined | null): boolean => v ?? false;
+
+export function estimateBatteryHours(
+  socPct: number,
+  dischargeKw: number,
+  capacityKwh: number,
+): number | null {
+  if (dischargeKw <= 0.01) return null;
+  const usableKwh = capacityKwh * (socPct / 100);
+  return usableKwh / dischargeKw;
+}
+
+const POWER_EPSILON = 0.05;
+
+export function deriveStateFromReading(r: CurrentReadingDto, settings: UserSettings): DerivedState {
+  const soc = n(r.batterySoc);
+  const batteryPower = n(r.batteryPowerKw);
+  const batteryDischarging = batteryPower < -POWER_EPSILON;
+  const batteryCharging = batteryPower > POWER_EPSILON;
+  const pvPower = n(r.generationPowerKw);
+  const loadPower = n(r.totalActivePowerKw);
+  const acInputPower = n(r.acInputPowerKw);
+  const gridOn = b(r.gridOn);
 
   return {
     soc,
@@ -73,70 +65,50 @@ export function deriveState(fields: FieldMap, settings: UserSettings): DerivedSt
     batteryDischarging,
     pvPower,
     loadPower,
-    acInputVoltage,
-    acInputPower: fieldValue(fields, "acInputPower"),
+    acInputVoltage: n(r.acInputVoltage),
+    acInputPower,
     gridOn,
-    heatSinkTemp: fieldValue(fields, "maxHeatSinkTemperature"),
-    workingMode: fieldDisplay(fields, "workingMode"),
-    faultId: fieldValue(fields, "faultID"),
-    batteryVoltage: fieldValue(fields, "batteryVoltage"),
-    acOutputFrequency: fieldValue(fields, "acOutputFrequency"),
-    todayPvGen: fieldValue(fields, "pvGeneratedEnergyOfDay"),
-    todayLoadConsumed: fieldValue(fields, "loadConsumedEnergyOfDay"),
-    todayBattDischarge: fieldValue(fields, "batteryDischargeOfThisDay"),
-    loadPercentage: fieldValue(fields, "loadPercentage"),
+    heatSinkTemp: n(r.maxHeatSinkTempC),
+    workingMode: r.workingMode ?? "—",
+    faultId: n(r.faultId),
+    batteryVoltage: n(r.batteryVoltage),
+    acOutputFrequency: n(r.acInputFrequency),
+    todayPvGen: n(r.pvGeneratedEnergyOfDayKwh),
+    todayLoadConsumed: n(r.loadConsumedEnergyOfDayKwh),
+    todayBattDischarge: n(r.batteryDischargeOfDayKwh),
+    todayGridConsumed: n(r.consumedEnergyFromGridOfDayKwh),
+    loadPercentage: n(r.loadPercentage),
     batteryHoursLeft: batteryDischarging
-      ? estimateBatteryHours(
-          soc,
-          Math.abs(batteryPower),
-          settings.batteryCapacityKwh,
-          fieldValue(fields, "batteryVoltage"),
-          fieldValue(fields, "batteryDischargeCurrent")
-        )
+      ? estimateBatteryHours(soc, Math.abs(batteryPower), settings.batteryCapacityKwh)
       : null,
+    pvPanelFlow: { flowDirection: pvPower > POWER_EPSILON ? 2 : null, isLight: pvPower > POWER_EPSILON },
+    gridFlow: { flowDirection: gridOn && acInputPower > POWER_EPSILON ? 1 : null, isLight: gridOn },
+    batteryFlow: {
+      flowDirection: batteryCharging ? 1 : batteryDischarging ? 2 : null,
+      isLight: batteryCharging || batteryDischarging,
+    },
+    loadFlow: { flowDirection: loadPower > POWER_EPSILON ? 2 : null, isLight: loadPower > POWER_EPSILON },
   };
 }
 
-export function deriveSummary(fields: FieldMap, settings: UserSettings): DerivedSummary {
-  const s = deriveState(fields, settings);
-
-  if (s.faultId !== 0) {
-    return { tone: "bad", message: `System fault \u2014 code #${s.faultId}. Check inverter.` };
-  }
-
+export function deriveSummary(state: DerivedState, settings: UserSettings): DerivedSummary {
+  const s = state;
+  if (s.faultId !== 0) return { tone: "bad", message: `System fault — code #${s.faultId}. Check inverter.` };
   if (s.gridOn && s.batteryCharging) {
-    const hours = estimateBatteryHours(
-      100 - s.soc,
-      s.batteryPower,
-      settings.batteryCapacityKwh,
-      fieldValue(fields, "batteryVoltage"),
-      fieldValue(fields, "batteryChargingCurrent")
-    );
-    const eta = hours ? ` \u2014 full in ~${hours.toFixed(1)}h` : "";
+    const hours = estimateBatteryHours(100 - s.soc, s.batteryPower, settings.batteryCapacityKwh);
+    const eta = hours ? ` — full in ~${hours.toFixed(1)}h` : "";
     return { tone: "good", message: `Grid is on. Battery charging${eta}.` };
   }
-
-  if (s.gridOn) {
-    return { tone: "good", message: "Running on grid power." };
-  }
-
-  if (!s.gridOn && s.pvPower > s.loadPower && s.pvPower > 0.05) {
+  if (s.gridOn) return { tone: "good", message: "Running on grid power." };
+  if (!s.gridOn && s.pvPower > s.loadPower && s.pvPower > POWER_EPSILON)
     return { tone: "good", message: "Solar is covering everything." };
-  }
-
-  if (!s.gridOn && s.pvPower > 0.05) {
-    return { tone: "warm", message: "Running on solar + battery." };
-  }
-
-  if (!s.gridOn && s.batteryDischarging && s.soc < settings.lowBatteryThreshold) {
-    return { tone: "bad", message: `Grid is out \u2014 battery low at ${s.soc}%.` };
-  }
-
+  if (!s.gridOn && s.pvPower > POWER_EPSILON) return { tone: "warm", message: "Running on solar + battery." };
+  if (!s.gridOn && s.batteryDischarging && s.soc < settings.lowBatteryThreshold)
+    return { tone: "bad", message: `Grid is out — battery low at ${s.soc.toFixed(0)}%.` };
   if (!s.gridOn && s.batteryDischarging) {
     const hrs = s.batteryHoursLeft;
     const est = hrs ? ` (~${hrs.toFixed(1)}h left)` : "";
-    return { tone: "warm", message: `Grid is out \u2014 running on battery${est}.` };
+    return { tone: "warm", message: `Grid is out — running on battery${est}.` };
   }
-
   return { tone: "neutral", message: "Standby." };
 }

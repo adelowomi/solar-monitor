@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Sun,
   BatteryCharging,
@@ -9,16 +9,15 @@ import {
   Bell,
   BellOff,
   RefreshCw,
-  LogOut,
   Settings,
+  BarChart3,
+  Sparkles,
 } from "lucide-react";
-import type { Session, EnergyFlowData, Station, Device, UserSettings } from "../api/types";
-import { listStations, listDevices, getEnergyFlow, getDailySolarHistory } from "../api/endpoints";
-import type { SolarTimePoint } from "../api/endpoints";
-import { ApiError } from "../api/client";
+import type { CurrentReadingDto, SunhouseClient } from "../api/sunhouse";
+import type { UserSettings } from "../api/types";
 import { usePolling } from "../hooks/usePolling";
 import { useNotifications } from "../hooks/useNotifications";
-import { deriveState, deriveSummary } from "../lib/derive";
+import { deriveStateFromReading, deriveSummary } from "../lib/derive";
 import { fmtKw, fmtKwh } from "../lib/format";
 import { StatusPill } from "./ui/StatusPill";
 import { HeroStatus } from "./HeroStatus";
@@ -27,180 +26,95 @@ import { PowerCard } from "./PowerCard";
 import { HouseLoadCard } from "./HouseLoadCard";
 import { SecondaryStats } from "./SecondaryStats";
 import { SettingsSheet } from "./SettingsSheet";
-import { PowerHistory } from "./PowerHistory";
-import { useLocalHistory } from "../hooks/useLocalHistory";
+import { InsightsPanel } from "./InsightsPanel";
+import { ConfigPanel } from "./ConfigPanel";
 
 const POLL_INTERVAL = 30_000;
 
 interface DashboardProps {
-  session: Session;
-  onLogout: () => void;
+  client: SunhouseClient;
+  apiBase: string;
   settings: UserSettings;
   onUpdateSettings: (patch: Partial<UserSettings>) => void;
 }
 
-export function Dashboard({ session, onLogout, settings, onUpdateSettings }: DashboardProps) {
-  const [station, setStation] = useState<Station | null>(null);
-  const [device, setDevice] = useState<Device | null>(null);
+export function Dashboard({ client, apiBase, settings, onUpdateSettings }: DashboardProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [insightsOpen, setInsightsOpen] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
   const { permission, enabled, toggle, requestPermission, notify } = useNotifications();
-  const { history: localHistory, record: recordHistory } = useLocalHistory();
-  const [solarHistory, setSolarHistory] = useState<SolarTimePoint[]>([]);
-  const [solarLoading, setSolarLoading] = useState(false);
 
   const prevGridOn = useRef<boolean | null>(null);
   const prevSoc = useRef<number | null>(null);
   const prevTemp = useRef<number | null>(null);
   const prevFault = useRef<number | null>(null);
 
-  const deviceRef = useRef(device);
-  deviceRef.current = device;
-  const stationRef = useRef(station);
-  stationRef.current = station;
+  const fetchCurrent = useCallback(async (): Promise<CurrentReadingDto> => client.current(), [client]);
 
-  const fetchFlow = useCallback(async (): Promise<EnergyFlowData> => {
-    let dev = deviceRef.current;
-    let sta = stationRef.current;
+  const { data: reading, error, lastUpdate, refetch, refreshing } = usePolling(fetchCurrent, POLL_INTERVAL);
 
-    if (!sta) {
-      const stations = await listStations(session.token);
-      sta = stations[0];
-      setStation(sta);
-    }
-    if (!dev) {
-      const devices = await listDevices(session.token, sta.id);
-      dev = devices[0];
-      setDevice(dev);
-    }
-
-    try {
-      return await getEnergyFlow(session.token, dev.id);
-    } catch (e) {
-      if (e instanceof ApiError && e.isAuth) onLogout();
-      throw e;
-    }
-  }, [session.token, onLogout]);
-
-  const { data: flow, error, lastUpdate, refreshing, refetch } = usePolling(
-    fetchFlow,
-    POLL_INTERVAL
-  );
-
-  // Fetch solar history when device is loaded
+  // Notifications: track transitions between polls.
   useEffect(() => {
-    if (!device) return;
-    let cancelled = false;
-    setSolarLoading(true);
-    getDailySolarHistory(session.token, device.id)
-      .then((pts) => {
-        if (!cancelled) setSolarHistory(pts);
-      })
-      .catch(() => {
-        /* silently ignore */
-      })
-      .finally(() => {
-        if (!cancelled) setSolarLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [device, session.token]);
+    if (!reading || !enabled) return;
+    const s = deriveStateFromReading(reading, settings);
 
-  // Record local power history on each poll
-  const derivedForHistory = useMemo(() => {
-    if (!flow) return null;
-    const st = deriveState(flow.deviceAttributeState.fields, settings);
-    return {
-      load: st.loadPower,
-      battery: st.batteryPower,
-      grid: st.acInputPower,
-      solar: st.pvPower,
-    };
-  }, [flow, settings]);
-
-  useEffect(() => {
-    if (derivedForHistory) recordHistory(derivedForHistory);
-  }, [derivedForHistory, recordHistory]);
-
-  // Alert transitions
-  useEffect(() => {
-    if (!flow) return;
-    const fields = flow.deviceAttributeState.fields;
-    const s = deriveState(fields, settings);
-
-    // Grid restored
     if (prevGridOn.current === false && s.gridOn && settings.alertGridRestored) {
-      notify("Grid power restored", {
-        body: `Mains power is back at ${s.acInputVoltage.toFixed(0)}V.`,
-        tag: "grid-restored",
-      });
+      notify("Grid restored", { body: "Mains power is back on." });
+    } else if (prevGridOn.current === true && !s.gridOn && settings.alertGridLost) {
+      notify("Grid lost", { body: "Mains power dropped. Running off battery/solar." });
     }
-    // Grid lost
-    if (prevGridOn.current === true && !s.gridOn && settings.alertGridLost) {
-      notify("Grid power lost", {
-        body: "Mains power is down. Running on battery.",
-        tag: "grid-lost",
-      });
-    }
-    // Low battery
     if (
       prevSoc.current !== null &&
-      prevSoc.current >= settings.lowBatteryThreshold &&
-      s.soc < settings.lowBatteryThreshold &&
+      prevSoc.current > settings.lowBatteryThreshold &&
+      s.soc <= settings.lowBatteryThreshold &&
       settings.alertLowBattery
     ) {
-      notify("Battery low", {
-        body: `Battery at ${s.soc}%. Consider reducing load.`,
-        tag: "low-battery",
-      });
+      notify("Battery low", { body: `SOC dropped below ${settings.lowBatteryThreshold}%.` });
     }
-    // High temp
     if (
       prevTemp.current !== null &&
       prevTemp.current < settings.highTempThreshold &&
       s.heatSinkTemp >= settings.highTempThreshold &&
       settings.alertHighTemp
     ) {
-      notify("Inverter temperature high", {
-        body: `Heat sink at ${s.heatSinkTemp.toFixed(1)}\u00b0C.`,
-        tag: "high-temp",
-      });
+      notify("Inverter hot", { body: `Heat sink at ${s.heatSinkTemp}°C.` });
     }
-    // Fault
     if (prevFault.current === 0 && s.faultId !== 0 && settings.alertFault) {
-      notify("System fault detected", {
-        body: `Fault code #${s.faultId}. Check inverter.`,
-        tag: "fault",
-      });
+      notify("System fault", { body: `Fault code #${s.faultId} reported.` });
     }
-
     prevGridOn.current = s.gridOn;
     prevSoc.current = s.soc;
     prevTemp.current = s.heatSinkTemp;
     prevFault.current = s.faultId;
-  }, [flow, settings, notify]);
+  }, [reading, settings, enabled, notify]);
 
-  if (!flow) {
+  if (!reading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-950">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white px-6">
         <div className="text-center">
-          <div className="inline-block w-8 h-8 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
-          <p className="text-slate-400 mt-4 font-light">
-            {error || "Loading your system\u2026"}
+          <RefreshCw className="w-6 h-6 mx-auto animate-spin text-amber-300" />
+          <p className="mt-3 text-sm text-slate-400 font-light">
+            {error ? error : "Fetching the latest reading…"}
           </p>
+          {error && (
+            <button
+              onClick={refetch}
+              className="mt-4 text-xs px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10"
+            >
+              Retry
+            </button>
+          )}
         </div>
       </div>
     );
   }
 
-  const fields = flow.deviceAttributeState.fields;
-  const s = deriveState(fields, settings);
-  const summary = deriveSummary(fields, settings);
-  const BatteryIcon = s.soc > 70 ? BatteryFull : s.soc > 25 ? BatteryCharging : BatteryLow;
+  const s = deriveStateFromReading(reading, settings);
+  const summary = deriveSummary(s, settings);
 
+  const BatteryIcon = s.soc > 80 ? BatteryFull : s.soc < 20 ? BatteryLow : BatteryCharging;
   const batteryBarColor =
     s.soc > 50 ? "bg-emerald-400" : s.soc > 20 ? "bg-amber-400" : "bg-red-400";
-
   const batterySubtitle = s.batteryHoursLeft
     ? `~${s.batteryHoursLeft.toFixed(1)}h left at current use`
     : s.batteryCharging
@@ -209,14 +123,12 @@ export function Dashboard({ session, onLogout, settings, onUpdateSettings }: Das
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white">
-      {/* Ambient glows */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-40 right-1/4 w-[500px] h-[500px] bg-amber-500/5 rounded-full blur-3xl" />
         <div className="absolute -bottom-40 left-1/4 w-[500px] h-[500px] bg-emerald-500/5 rounded-full blur-3xl" />
       </div>
 
       <div className="relative max-w-5xl mx-auto px-6 py-8">
-        {/* Header */}
         <header className="flex items-center justify-between mb-10">
           <div>
             <div className="flex items-center gap-2.5">
@@ -225,11 +137,9 @@ export function Dashboard({ session, onLogout, settings, onUpdateSettings }: Das
               </div>
               <span className="font-light text-lg tracking-tight font-display">Sunhouse</span>
             </div>
-            {station && (
-              <p className="text-xs text-slate-500 mt-1.5 ml-10">
-                {station.name} &middot; {station.city}
-              </p>
-            )}
+            <p className="text-xs text-slate-500 mt-1.5 ml-10">
+              Reading from Sunhouse API · {reading.ageSeconds}s old
+            </p>
           </div>
           <div className="flex items-center gap-2">
             {permission === "granted" ? (
@@ -257,20 +167,30 @@ export function Dashboard({ session, onLogout, settings, onUpdateSettings }: Das
               onClick={refetch}
               disabled={refreshing}
               className="p-2.5 rounded-xl bg-white/5 border border-white/10 text-slate-400 hover:text-slate-200 transition"
+              title="Refresh"
             >
               <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
             </button>
             <button
-              onClick={() => setSettingsOpen(true)}
+              onClick={() => setInsightsOpen(true)}
               className="p-2.5 rounded-xl bg-white/5 border border-white/10 text-slate-400 hover:text-slate-200 transition"
+              title="Insights"
             >
-              <Settings className="w-4 h-4" />
+              <Sparkles className="w-4 h-4" />
             </button>
             <button
-              onClick={onLogout}
+              onClick={() => setConfigOpen(true)}
               className="p-2.5 rounded-xl bg-white/5 border border-white/10 text-slate-400 hover:text-slate-200 transition"
+              title="API settings"
             >
-              <LogOut className="w-4 h-4" />
+              <BarChart3 className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="p-2.5 rounded-xl bg-white/5 border border-white/10 text-slate-400 hover:text-slate-200 transition"
+              title="Local settings"
+            >
+              <Settings className="w-4 h-4" />
             </button>
           </div>
         </header>
@@ -284,33 +204,28 @@ export function Dashboard({ session, onLogout, settings, onUpdateSettings }: Das
           acInputPower={s.acInputPower}
           soc={s.soc}
           gridOn={s.gridOn}
-          pvPanelFlow={flow.pvPanelFlow}
-          gridFlow={flow.gridFlow}
-          batteryFlow={flow.batteryFlow}
-          loadFlow={flow.loadFlow}
+          pvPanelFlow={s.pvPanelFlow}
+          gridFlow={s.gridFlow}
+          batteryFlow={s.batteryFlow}
+          loadFlow={s.loadFlow}
         />
 
-        {/* Main flow grid */}
         <div className="grid md:grid-cols-3 gap-4 mb-6">
           <PowerCard
             icon={Sun}
             label="Solar"
             colorClass="text-amber-300"
             value={fmtKw(s.pvPower)}
-            pill={
-              s.pvPower > 0.05 ? <StatusPill tone="warm">producing</StatusPill> : undefined
-            }
+            pill={s.pvPower > 0.05 ? <StatusPill tone="warm">producing</StatusPill> : undefined}
             subtitle={
-              s.todayPvGen > 0
-                ? `${fmtKwh(s.todayPvGen)} generated today`
-                : "No solar yield yet today"
+              s.todayPvGen > 0 ? `${fmtKwh(s.todayPvGen)} generated today` : "No solar yield yet today"
             }
           />
           <PowerCard
             icon={BatteryIcon}
             label="Battery"
             colorClass="text-emerald-300"
-            value={`${s.soc} %`}
+            value={`${s.soc.toFixed(0)} %`}
             pill={
               s.batteryCharging ? (
                 <StatusPill tone="good" icon={BatteryCharging}>
@@ -327,14 +242,8 @@ export function Dashboard({ session, onLogout, settings, onUpdateSettings }: Das
             icon={s.gridOn ? PlugZap : Plug}
             label="Grid"
             colorClass="text-sky-300"
-            value={s.gridOn ? `${s.acInputVoltage.toFixed(0)} V` : "\u2014"}
-            pill={
-              s.gridOn ? (
-                <StatusPill tone="good">on</StatusPill>
-              ) : (
-                <StatusPill tone="bad">off</StatusPill>
-              )
-            }
+            value={s.gridOn ? `${s.acInputVoltage.toFixed(0)} V` : "—"}
+            pill={s.gridOn ? <StatusPill tone="good">on</StatusPill> : <StatusPill tone="bad">off</StatusPill>}
             subtitle={s.gridOn ? "Mains live" : "No mains power right now"}
           />
         </div>
@@ -345,12 +254,6 @@ export function Dashboard({ session, onLogout, settings, onUpdateSettings }: Das
           todayConsumed={s.todayLoadConsumed}
           todayBattDischarge={s.todayBattDischarge}
           batteryDischarging={s.batteryDischarging}
-        />
-
-        <PowerHistory
-          solarHistory={solarHistory}
-          solarLoading={solarLoading}
-          localHistory={localHistory}
         />
 
         <SecondaryStats
@@ -383,7 +286,7 @@ export function Dashboard({ session, onLogout, settings, onUpdateSettings }: Das
         )}
 
         <p className="text-xs text-slate-600 text-center font-light">
-          Polls every 30 seconds &middot; Signed in as {session.account}
+          Polls every 30 seconds · API at {apiBase}
         </p>
       </div>
 
@@ -393,6 +296,9 @@ export function Dashboard({ session, onLogout, settings, onUpdateSettings }: Das
         settings={settings}
         onUpdate={onUpdateSettings}
       />
+
+      <InsightsPanel open={insightsOpen} onClose={() => setInsightsOpen(false)} client={client} apiBase={apiBase} />
+      <ConfigPanel open={configOpen} onClose={() => setConfigOpen(false)} client={client} />
     </div>
   );
 }

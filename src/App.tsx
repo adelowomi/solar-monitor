@@ -1,20 +1,18 @@
-import { useSession } from "./hooks/useSession";
+import { useApi } from "./hooks/useApi";
 import { useSettings } from "./hooks/useSettings";
-import { Login } from "./components/Login";
 import { Dashboard } from "./components/Dashboard";
+import { ConfigMissing } from "./components/ConfigMissing";
 
 export default function App() {
-  const { session, signIn, signOut } = useSession();
+  const { config, client } = useApi();
   const { settings, updateSettings } = useSettings();
 
-  if (!session) {
-    return <Login onLogin={signIn} />;
-  }
+  if (!config || !client) return <ConfigMissing />;
 
   return (
     <Dashboard
-      session={session}
-      onLogout={signOut}
+      client={client}
+      apiBase={config.baseUrl}
       settings={settings}
       onUpdateSettings={updateSettings}
     />
