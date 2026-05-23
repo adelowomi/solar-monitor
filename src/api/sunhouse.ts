@@ -26,6 +26,8 @@ export type PollerStatusDto = Schemas["PollerStatusDto"];
 export type ConfigurationDto = Schemas["ConfigurationDto"];
 export type UpdateConfigurationRequest = Schemas["UpdateConfigurationRequest"];
 export type SetCredentialsRequest = Schemas["SetCredentialsRequest"];
+export type TestEmailRequest = Schemas["TestEmailRequest"];
+export type EmailSentDto = Schemas["EmailSentDto"];
 
 export class SunhouseApiError extends Error {
   code: string;
@@ -169,6 +171,12 @@ export function createSunhouseClient({ baseUrl, apiKey }: SunhouseClientOptions)
     triggerPoll: async () => {
       const { data, response } = await fetch.POST("/api/v1/poller/refresh");
       return unwrap<PollerStatusDto>(data, response.status);
+    },
+
+    // Email
+    sendTestEmail: async (req: TestEmailRequest) => {
+      const { data, response } = await fetch.POST("/api/v1/email/test", { body: req });
+      return unwrap<EmailSentDto>(data, response.status);
     },
 
     exportDaysCsvUrl: (from: string, to: string) =>

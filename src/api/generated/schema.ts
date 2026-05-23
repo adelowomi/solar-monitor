@@ -474,6 +474,63 @@ export interface paths {
         };
         trace?: never;
     };
+    "/api/v1/email/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["TestEmailRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["EmailSentDtoApiResponse"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiResponse"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -1092,6 +1149,24 @@ export interface components {
             webhookOnFault: boolean;
             /** Format: double */
             pvStringDriftPercentThreshold: number;
+            recipientEmail?: string | null;
+            emailConfigured: boolean;
+            emailOnGridLost: boolean;
+            emailOnGridRestored: boolean;
+            emailOnFault: boolean;
+            emailOnLowBattery: boolean;
+            /** Format: double */
+            lowBatterySocThreshold: number;
+            emailOnLongOutage: boolean;
+            /** Format: double */
+            longOutageMinutesThreshold: number;
+            /** Format: time */
+            emailDailySummaryAtLocal?: string | null;
+            /** Format: time */
+            emailMidDaySummaryAtLocal?: string | null;
+            /** Format: time */
+            emailWeeklySummaryAtLocal?: string | null;
+            emailWeeklySummaryDay: components["schemas"]["DayOfWeek"];
         };
         ConfigurationDtoApiResponse: {
             success: boolean;
@@ -1255,6 +1330,20 @@ export interface components {
             success: boolean;
             message: string;
             data?: components["schemas"]["DailyStatDto"][] | null;
+            error?: components["schemas"]["ErrorResponse"];
+            /** Format: int32 */
+            statusCode: number;
+        };
+        /** @enum {string} */
+        DayOfWeek: "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
+        EmailSentDto: {
+            sent: boolean;
+            recipient?: string | null;
+        };
+        EmailSentDtoApiResponse: {
+            success: boolean;
+            message: string;
+            data?: components["schemas"]["EmailSentDto"];
             error?: components["schemas"]["ErrorResponse"];
             /** Format: int32 */
             statusCode: number;
@@ -1580,6 +1669,9 @@ export interface components {
             /** Format: int32 */
             statusCode: number;
         };
+        TestEmailRequest: {
+            to?: string | null;
+        };
         UpdateConfigurationRequest: {
             /** Format: double */
             gridTariffNgnPerKwh?: number | null;
@@ -1603,6 +1695,27 @@ export interface components {
             webhookOnFault?: boolean | null;
             /** Format: double */
             pvStringDriftPercentThreshold?: number | null;
+            recipientEmail?: string | null;
+            clearRecipientEmail?: boolean | null;
+            emailOnGridLost?: boolean | null;
+            emailOnGridRestored?: boolean | null;
+            emailOnFault?: boolean | null;
+            emailOnLowBattery?: boolean | null;
+            /** Format: double */
+            lowBatterySocThreshold?: number | null;
+            emailOnLongOutage?: boolean | null;
+            /** Format: double */
+            longOutageMinutesThreshold?: number | null;
+            /** Format: time */
+            emailDailySummaryAtLocal?: string | null;
+            clearEmailDailySummary?: boolean | null;
+            /** Format: time */
+            emailMidDaySummaryAtLocal?: string | null;
+            clearEmailMidDaySummary?: boolean | null;
+            /** Format: time */
+            emailWeeklySummaryAtLocal?: string | null;
+            clearEmailWeeklySummary?: boolean | null;
+            emailWeeklySummaryDay?: components["schemas"]["DayOfWeek"];
         };
         YearSummaryDto: {
             /** Format: int32 */

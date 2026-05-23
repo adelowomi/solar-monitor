@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { X, RefreshCw, KeyRound, Wallet, Sun, Battery, Webhook, Save } from "lucide-react";
+import { X, RefreshCw, KeyRound, Wallet, Sun, Battery, Webhook, Save, Mail, Send } from "lucide-react";
 import type {
   ConfigurationDto,
   PollerStatusDto,
@@ -13,10 +13,11 @@ interface ConfigPanelProps {
   client: SunhouseClient;
 }
 
-type TabKey = "tariffs" | "poller" | "webhook";
+type TabKey = "tariffs" | "email" | "poller" | "webhook";
 
 const TABS: { key: TabKey; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: "tariffs", label: "Tariffs & site", icon: Wallet },
+  { key: "email", label: "Email", icon: Mail },
   { key: "poller", label: "Poller", icon: KeyRound },
   { key: "webhook", label: "Webhook", icon: Webhook },
 ];
@@ -64,6 +65,7 @@ export function ConfigPanel({ open, onClose, client }: ConfigPanelProps) {
 
         <div className="p-6">
           {tab === "tariffs" && <TariffsTab client={client} />}
+          {tab === "email" && <EmailTab client={client} />}
           {tab === "poller" && <PollerTab client={client} />}
           {tab === "webhook" && <WebhookTab client={client} />}
         </div>
@@ -394,6 +396,231 @@ function PollerTab({ client }: { client: SunhouseClient }) {
           <StatusLine kind={msg?.kind ?? null} text={msg?.text ?? ""} />
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- */
+/* Email                                                            */
+/* ---------------------------------------------------------------- */
+
+type DayOfWeek = "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
+const DAYS: { value: DayOfWeek; label: string }[] = [
+  { value: "sunday", label: "Sunday" },
+  { value: "monday", label: "Monday" },
+  { value: "tuesday", label: "Tuesday" },
+  { value: "wednesday", label: "Wednesday" },
+  { value: "thursday", label: "Thursday" },
+  { value: "friday", label: "Friday" },
+  { value: "saturday", label: "Saturday" },
+];
+
+function EmailTab({ client }: { client: SunhouseClient }) {
+  const { config, setConfig, error, loading } = useConfig(client);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [status, setStatus] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
+  if (loading) return <LoadingRow />;
+  if (error) return <ErrorRow text={error} />;
+  if (!config) return null;
+
+  const save = async () => {
+    setSaving(true);
+    setStatus(null);
+    try {
+      const patch: UpdateConfigurationRequest = {
+        recipientEmail: config.recipientEmail ?? "",
+        emailOnGridLost: config.emailOnGridLost,
+        emailOnGridRestored: config.emailOnGridRestored,
+        emailOnFault: config.emailOnFault,
+        emailOnLowBattery: config.emailOnLowBattery,
+        lowBatterySocThreshold: config.lowBatterySocThreshold,
+        emailOnLongOutage: config.emailOnLongOutage,
+        longOutageMinutesThreshold: config.longOutageMinutesThreshold,
+        emailDailySummaryAtLocal: config.emailDailySummaryAtLocal ?? null,
+        clearEmailDailySummary: !config.emailDailySummaryAtLocal,
+        emailMidDaySummaryAtLocal: config.emailMidDaySummaryAtLocal ?? null,
+        clearEmailMidDaySummary: !config.emailMidDaySummaryAtLocal,
+        emailWeeklySummaryAtLocal: config.emailWeeklySummaryAtLocal ?? null,
+        clearEmailWeeklySummary: !config.emailWeeklySummaryAtLocal,
+        emailWeeklySummaryDay: config.emailWeeklySummaryDay,
+      };
+      const updated = await client.updateConfiguration(patch);
+      setConfig(updated);
+      setStatus({ kind: "ok", text: "Saved." });
+    } catch (e) {
+      setStatus({ kind: "err", text: e instanceof Error ? e.message : "Save failed" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const sendTest = async () => {
+    setTesting(true);
+    setStatus(null);
+    try {
+      const result = await client.sendTestEmail({ to: null });
+      setStatus({
+        kind: result.sent ? "ok" : "err",
+        text: result.sent ? `Sent test email to ${result.recipient}` : "Test email was not sent",
+      });
+    } catch (e) {
+      setStatus({ kind: "err", text: e instanceof Error ? e.message : "Test send failed" });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-3xl bg-white/[0.04] border border-white/[0.06] p-6">
+        <h3 className="text-sm tracking-wide text-slate-400 mb-2 flex items-center gap-2">
+          <Mail className="w-4 h-4 text-emerald-300" /> Recipient
+        </h3>
+        <p className="text-xs text-slate-500 mb-4">
+          The single inbox that receives every alert and summary email.
+        </p>
+        <input
+          type="email"
+          value={config.recipientEmail ?? ""}
+          onChange={(e) => setConfig({ ...config, recipientEmail: e.target.value })}
+          placeholder="you@example.com"
+          className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white text-sm focus:outline-none focus:border-amber-400/50"
+        />
+        <div className="flex gap-2 mt-3">
+          <button
+            onClick={sendTest}
+            disabled={testing || !config.recipientEmail}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-slate-200 hover:bg-white/10 disabled:opacity-40 transition text-sm"
+          >
+            <Send className="w-3.5 h-3.5" /> {testing ? "Sending…" : "Send test email"}
+          </button>
+          {config.emailConfigured && (
+            <span className="text-[11px] text-emerald-400/80 self-center">API can send</span>
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-3xl bg-white/[0.04] border border-white/[0.06] p-6">
+        <h3 className="text-sm tracking-wide text-slate-400 mb-4">Alerts</h3>
+        <FieldRow label="Grid lost" hint="One email per outage when mains drops">
+          <Checkbox
+            label=""
+            checked={config.emailOnGridLost}
+            onChange={(v) => setConfig({ ...config, emailOnGridLost: v })}
+          />
+        </FieldRow>
+        <FieldRow label="Grid restored" hint="With outage duration">
+          <Checkbox
+            label=""
+            checked={config.emailOnGridRestored}
+            onChange={(v) => setConfig({ ...config, emailOnGridRestored: v })}
+          />
+        </FieldRow>
+        <FieldRow label="Inverter fault" hint="First-seen alert per fault transition">
+          <Checkbox
+            label=""
+            checked={config.emailOnFault}
+            onChange={(v) => setConfig({ ...config, emailOnFault: v })}
+          />
+        </FieldRow>
+        <FieldRow label="Low battery" hint="Once per outage when SOC crosses below">
+          <div className="flex items-center gap-3">
+            <NumInput
+              value={config.lowBatterySocThreshold}
+              onChange={(v) => setConfig({ ...config, lowBatterySocThreshold: v })}
+              unit="%"
+            />
+            <Checkbox
+              label=""
+              checked={config.emailOnLowBattery}
+              onChange={(v) => setConfig({ ...config, emailOnLowBattery: v })}
+            />
+          </div>
+        </FieldRow>
+        <FieldRow label="Long outage" hint="Once per outage that exceeds the threshold">
+          <div className="flex items-center gap-3">
+            <NumInput
+              value={config.longOutageMinutesThreshold}
+              onChange={(v) => setConfig({ ...config, longOutageMinutesThreshold: v })}
+              unit="min"
+            />
+            <Checkbox
+              label=""
+              checked={config.emailOnLongOutage}
+              onChange={(v) => setConfig({ ...config, emailOnLongOutage: v })}
+            />
+          </div>
+        </FieldRow>
+      </div>
+
+      <div className="rounded-3xl bg-white/[0.04] border border-white/[0.06] p-6">
+        <h3 className="text-sm tracking-wide text-slate-400 mb-2">Scheduled summaries</h3>
+        <p className="text-xs text-slate-500 mb-4">
+          Clear a time to disable that summary. All times local ({config.sundownLocal} sundown).
+        </p>
+        <FieldRow label="Morning recap" hint="Yesterday's totals">
+          <TimeOrOff
+            value={config.emailDailySummaryAtLocal ?? null}
+            onChange={(v) => setConfig({ ...config, emailDailySummaryAtLocal: v })}
+          />
+        </FieldRow>
+        <FieldRow label="Midday check" hint="Today's progress so far">
+          <TimeOrOff
+            value={config.emailMidDaySummaryAtLocal ?? null}
+            onChange={(v) => setConfig({ ...config, emailMidDaySummaryAtLocal: v })}
+          />
+        </FieldRow>
+        <FieldRow label="Weekly recap" hint="Sent on the configured day">
+          <div className="flex items-center gap-2">
+            <select
+              value={config.emailWeeklySummaryDay}
+              onChange={(e) => setConfig({ ...config, emailWeeklySummaryDay: e.target.value as DayOfWeek })}
+              className="px-2 py-1.5 bg-white/5 border border-white/10 rounded-lg text-white text-sm focus:outline-none focus:border-amber-400/50"
+            >
+              {DAYS.map((d) => (
+                <option key={d.value} value={d.value}>{d.label}</option>
+              ))}
+            </select>
+            <TimeOrOff
+              value={config.emailWeeklySummaryAtLocal ?? null}
+              onChange={(v) => setConfig({ ...config, emailWeeklySummaryAtLocal: v })}
+            />
+          </div>
+        </FieldRow>
+      </div>
+
+      <button
+        onClick={save}
+        disabled={saving}
+        className="mt-2 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 text-slate-950 font-medium hover:shadow-lg hover:shadow-amber-500/20 disabled:opacity-40 transition"
+      >
+        <Save className="w-4 h-4" /> {saving ? "Saving…" : "Save email settings"}
+      </button>
+      <StatusLine kind={status?.kind ?? null} text={status?.text ?? ""} />
+    </div>
+  );
+}
+
+function TimeOrOff({ value, onChange }: { value: string | null; onChange: (v: string | null) => void }) {
+  return (
+    <div className="flex items-center gap-2">
+      <input
+        type="time"
+        value={value ? value.slice(0, 5) : ""}
+        onChange={(e) => onChange(e.target.value ? `${e.target.value}:00` : null)}
+        className="px-3 py-1.5 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:border-amber-400/50"
+      />
+      {value && (
+        <button
+          onClick={() => onChange(null)}
+          className="text-[11px] px-2 py-1 rounded-lg text-slate-400 hover:text-slate-200"
+          title="Disable"
+        >
+          off
+        </button>
+      )}
     </div>
   );
 }
