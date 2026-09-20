@@ -13,6 +13,7 @@ export default function App() {
     <Dashboard
       client={client}
       apiBase={config.baseUrl}
+      apiKey={config.apiKey}
       settings={settings}
       onUpdateSettings={updateSettings}
     />

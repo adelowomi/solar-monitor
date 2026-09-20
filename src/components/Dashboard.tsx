@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Sun,
   BatteryCharging,
@@ -12,11 +12,17 @@ import {
   Settings,
   BarChart3,
   Sparkles,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
 import type { CurrentReadingDto, SunhouseClient } from "../api/sunhouse";
+import type { AlertEvent } from "../api/events";
 import type { UserSettings } from "../api/types";
 import { usePolling } from "../hooks/usePolling";
 import { useNotifications } from "../hooks/useNotifications";
+import { useAlertStream, deviceId } from "../hooks/useAlertStream";
+import { createAlarm } from "../lib/alarm";
+import { registerPush } from "../lib/push";
 import { deriveStateFromReading, deriveSummary } from "../lib/derive";
 import { fmtKw, fmtKwh } from "../lib/format";
 import { StatusPill } from "./ui/StatusPill";
@@ -25,72 +31,131 @@ import { EnergyFlowDiagram } from "./EnergyFlowDiagram";
 import { PowerCard } from "./PowerCard";
 import { HouseLoadCard } from "./HouseLoadCard";
 import { SecondaryStats } from "./SecondaryStats";
-import { SettingsSheet } from "./SettingsSheet";
+import { SettingsSheet, type PushDeviceDto } from "./SettingsSheet";
 import { InsightsPanel } from "./InsightsPanel";
 import { ConfigPanel } from "./ConfigPanel";
+import { ArmButton } from "./ArmButton";
+import { AlarmBanner } from "./AlarmBanner";
 
 const POLL_INTERVAL = 30_000;
 
 interface DashboardProps {
   client: SunhouseClient;
   apiBase: string;
+  apiKey: string;
   settings: UserSettings;
   onUpdateSettings: (patch: Partial<UserSettings>) => void;
 }
 
-export function Dashboard({ client, apiBase, settings, onUpdateSettings }: DashboardProps) {
+export function Dashboard({ client, apiBase, apiKey, settings, onUpdateSettings }: DashboardProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const { permission, enabled, toggle, requestPermission, notify } = useNotifications();
 
-  const prevGridOn = useRef<boolean | null>(null);
-  const prevSoc = useRef<number | null>(null);
-  const prevTemp = useRef<number | null>(null);
-  const prevFault = useRef<number | null>(null);
+  const alarm = useMemo(() => createAlarm(), []);
+  const [armed, setArmed] = useState(() => alarm.isArmed());
+  useEffect(() => alarm.onStateChange(setArmed), [alarm]);
+  const [pushUnavailable, setPushUnavailable] = useState(false);
+
+  // pushUnavailable is otherwise only set inside handleArm, so after a reload a
+  // device whose push subscription has since been revoked shows no warning
+  // until the user re-arms. Check on mount too, whenever arming intent persists,
+  // so the degradation stays visible instead of silently disappearing.
+  useEffect(() => {
+    if (!settings.alarmArmIntent) return;
+    if (!("serviceWorker" in navigator)) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const reg = await navigator.serviceWorker.getRegistration();
+        const sub = await reg?.pushManager.getSubscription();
+        if (!cancelled) setPushUnavailable(!sub);
+      } catch {
+        if (!cancelled) setPushUnavailable(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [settings.alarmArmIntent]);
+
+  const [devices, setDevices] = useState<PushDeviceDto[] | null>(null);
+  const [devicesError, setDevicesError] = useState<string | null>(null);
+
+  // Fetched from the settings-gear click itself, not from an effect reacting
+  // to `settingsOpen` — this is a plain user-initiated action, not an effect
+  // synchronizing with an external system, so it stays outside useEffect.
+  const loadDevices = useCallback(async () => {
+    try {
+      const res = await fetch(`${apiBase}/api/events/push/devices`, {
+        headers: { "X-Api-Key": apiKey },
+      });
+      if (!res.ok) throw new Error(`devices ${res.status}`);
+      setDevices(await res.json());
+      setDevicesError(null);
+    } catch {
+      setDevicesError("Couldn't load push devices");
+    }
+  }, [apiBase, apiKey]);
+
+  const handleOpenSettings = useCallback(() => {
+    setSettingsOpen(true);
+    void loadDevices();
+  }, [loadDevices]);
+
+  const handleRevokeDevice = useCallback(
+    (endpoint: string) => {
+      // Optimistic: the device disappears immediately, then we confirm with
+      // the server. A failed revoke just gets picked back up on next open.
+      setDevices((prev) => prev?.filter((d) => d.endpoint !== endpoint) ?? prev);
+      void fetch(`${apiBase}/api/events/push/subscribe?endpoint=${encodeURIComponent(endpoint)}`, {
+        method: "DELETE",
+        headers: { "X-Api-Key": apiKey },
+      }).catch(() => { /* best effort — device list will self-correct on next open */ });
+    },
+    [apiBase, apiKey]
+  );
+
+  const onAlertEvent = useCallback(
+    (e: AlertEvent) => notify(e.title, { body: e.body }),
+    [notify]
+  );
+
+  const { connected, activeAlert, dismiss } = useAlertStream({
+    apiBase,
+    apiKey,
+    settings,
+    alarm,
+    onEvent: onAlertEvent,
+  });
+
+  const handleArm = useCallback(async () => {
+    // Single click must do the whole gesture: unlock audio, ask for
+    // notification permission, register for push (reach when no tab is
+    // armed), and persist intent so a reload can tell the user they're
+    // silently disarmed instead of looking fine.
+    await alarm.unlock();
+    await requestPermission();
+    onUpdateSettings({ alarmArmIntent: true });
+    // Push can never be loud — the in-tab siren above is the loud path.
+    // This only extends reach to devices with no armed tab; if it fails,
+    // arming still succeeds and we surface the degradation instead of
+    // hiding it.
+    const ok = await registerPush(apiBase, apiKey, deviceId());
+    setPushUnavailable(!ok);
+  }, [alarm, requestPermission, onUpdateSettings, apiBase, apiKey]);
+
+  const handleTestAlarm = useCallback(() => {
+    alarm.play("siren", settings.alarmDurationSeconds * 1000, settings.alarmVolume);
+  }, [alarm, settings.alarmDurationSeconds, settings.alarmVolume]);
 
   const fetchCurrent = useCallback(async (): Promise<CurrentReadingDto> => client.current(), [client]);
 
   const { data: reading, error, lastUpdate, refetch, refreshing } = usePolling(fetchCurrent, POLL_INTERVAL);
 
-  // Notifications: track transitions between polls.
-  useEffect(() => {
-    if (!reading || !enabled) return;
-    const s = deriveStateFromReading(reading, settings);
-
-    if (prevGridOn.current === false && s.gridOn && settings.alertGridRestored) {
-      notify("Grid restored", { body: "Mains power is back on." });
-    } else if (prevGridOn.current === true && !s.gridOn && settings.alertGridLost) {
-      notify("Grid lost", { body: "Mains power dropped. Running off battery/solar." });
-    }
-    if (
-      prevSoc.current !== null &&
-      prevSoc.current > settings.lowBatteryThreshold &&
-      s.soc <= settings.lowBatteryThreshold &&
-      settings.alertLowBattery
-    ) {
-      notify("Battery low", { body: `SOC dropped below ${settings.lowBatteryThreshold}%.` });
-    }
-    if (
-      prevTemp.current !== null &&
-      prevTemp.current < settings.highTempThreshold &&
-      s.heatSinkTemp >= settings.highTempThreshold &&
-      settings.alertHighTemp
-    ) {
-      notify("Inverter hot", { body: `Heat sink at ${s.heatSinkTemp}°C.` });
-    }
-    if (prevFault.current === 0 && s.faultId !== 0 && settings.alertFault) {
-      notify("System fault", { body: `Fault code #${s.faultId} reported.` });
-    }
-    prevGridOn.current = s.gridOn;
-    prevSoc.current = s.soc;
-    prevTemp.current = s.heatSinkTemp;
-    prevFault.current = s.faultId;
-  }, [reading, settings, enabled, notify]);
-
   if (!reading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white px-6">
+        <AlarmBanner event={activeAlert} onDismiss={dismiss} />
         <div className="text-center">
           <RefreshCw className="w-6 h-6 mx-auto animate-spin text-amber-300" />
           <p className="mt-3 text-sm text-slate-400 font-light">
@@ -123,6 +188,7 @@ export function Dashboard({ client, apiBase, settings, onUpdateSettings }: Dashb
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white">
+      <AlarmBanner event={activeAlert} onDismiss={dismiss} />
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-40 right-1/4 w-[500px] h-[500px] bg-amber-500/5 rounded-full blur-3xl" />
         <div className="absolute -bottom-40 left-1/4 w-[500px] h-[500px] bg-emerald-500/5 rounded-full blur-3xl" />
@@ -142,6 +208,24 @@ export function Dashboard({ client, apiBase, settings, onUpdateSettings }: Dashb
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-medium ${
+                connected
+                  ? "bg-emerald-500/10 text-emerald-300"
+                  : "bg-red-500/15 text-red-300"
+              }`}
+              title={connected ? "Live alert stream connected" : "Alert stream disconnected — reconnecting"}
+            >
+              {connected ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
+            </span>
+            <ArmButton
+              armed={armed}
+              intent={settings.alarmArmIntent}
+              connected={connected}
+              onArm={handleArm}
+              onTest={handleTestAlarm}
+              pushUnavailable={pushUnavailable}
+            />
             {permission === "granted" ? (
               <button
                 onClick={toggle}
@@ -186,7 +270,7 @@ export function Dashboard({ client, apiBase, settings, onUpdateSettings }: Dashb
               <BarChart3 className="w-4 h-4" />
             </button>
             <button
-              onClick={() => setSettingsOpen(true)}
+              onClick={handleOpenSettings}
               className="p-2.5 rounded-xl bg-white/5 border border-white/10 text-slate-400 hover:text-slate-200 transition"
               title="Local settings"
             >
@@ -295,6 +379,11 @@ export function Dashboard({ client, apiBase, settings, onUpdateSettings }: Dashb
         onClose={() => setSettingsOpen(false)}
         settings={settings}
         onUpdate={onUpdateSettings}
+        alarm={alarm}
+        armed={armed}
+        devices={devices}
+        devicesError={devicesError}
+        onRevokeDevice={handleRevokeDevice}
       />
 
       <InsightsPanel open={insightsOpen} onClose={() => setInsightsOpen(false)} client={client} apiBase={apiBase} />
