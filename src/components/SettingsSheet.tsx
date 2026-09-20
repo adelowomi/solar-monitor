@@ -1,12 +1,32 @@
-import { X } from "lucide-react";
-import type { UserSettings } from "../api/types";
+import { X, Volume2 } from "lucide-react";
+import { ALERT_EVENT_TYPES, type AlarmTone, type AlertEventType, type UserSettings } from "../api/types";
+import type { Alarm } from "../lib/alarm";
 
 interface SettingsSheetProps {
   open: boolean;
   onClose: () => void;
   settings: UserSettings;
   onUpdate: (patch: Partial<UserSettings>) => void;
+  /**
+   * The single Alarm instance owned by Dashboard. Reusing it (rather than
+   * creating a private one here) means "Test alarm" plays through the same
+   * AudioContext the header's Arm button unlocked — a separate instance
+   * would have its own, never-unlocked, permanently suspended context and
+   * would silently produce no sound.
+   */
+  alarm: Alarm;
 }
+
+const TONES: AlarmTone[] = ["siren", "chime", "pulse", "alert"];
+
+const EVENT_LABELS: Record<AlertEventType, string> = {
+  grid_lost: "Grid lost",
+  grid_restored: "Grid restored",
+  low_battery: "Low battery",
+  inverter_hot: "Inverter hot",
+  fault_detected: "Fault detected",
+  long_outage: "Long outage",
+};
 
 function Toggle({
   label,
@@ -37,8 +57,17 @@ function Toggle({
   );
 }
 
-export function SettingsSheet({ open, onClose, settings, onUpdate }: SettingsSheetProps) {
+export function SettingsSheet({ open, onClose, settings, onUpdate, alarm }: SettingsSheetProps) {
   if (!open) return null;
+
+  const updateEventSetting = (type: AlertEventType, patch: Partial<{ sound: boolean; tone: AlarmTone }>) => {
+    onUpdate({
+      alarmEvents: {
+        ...settings.alarmEvents,
+        [type]: { ...settings.alarmEvents[type], ...patch },
+      },
+    });
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center">
@@ -78,35 +107,82 @@ export function SettingsSheet({ open, onClose, settings, onUpdate }: SettingsShe
           </div>
 
           <div>
-            <h3 className="text-xs uppercase tracking-widest text-slate-500 mb-3 font-medium">
-              Notifications
-            </h3>
-            <Toggle
-              label="Grid restored"
-              checked={settings.alertGridRestored}
-              onChange={(v) => onUpdate({ alertGridRestored: v })}
-            />
-            <Toggle
-              label="Grid lost"
-              checked={settings.alertGridLost}
-              onChange={(v) => onUpdate({ alertGridLost: v })}
-            />
-            <Toggle
-              label="Low battery"
-              checked={settings.alertLowBattery}
-              onChange={(v) => onUpdate({ alertLowBattery: v })}
-            />
-            <Toggle
-              label="High temperature"
-              checked={settings.alertHighTemp}
-              onChange={(v) => onUpdate({ alertHighTemp: v })}
-            />
-            <Toggle
-              label="Fault detected"
-              checked={settings.alertFault}
-              onChange={(v) => onUpdate({ alertFault: v })}
-            />
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs uppercase tracking-widest text-slate-500 font-medium">
+                Alarm
+              </h3>
+              <button
+                type="button"
+                onClick={() =>
+                  alarm.play("siren", settings.alarmDurationSeconds * 1000, settings.alarmVolume)
+                }
+                className="inline-flex items-center gap-1.5 rounded-full bg-white/5 border border-white/10 px-3 py-1 text-xs text-slate-300 hover:bg-white/10 transition"
+                title="Requires the alarm to already be armed (see the header button)"
+              >
+                <Volume2 className="w-3.5 h-3.5" />
+                Test alarm
+              </button>
+            </div>
+
+            <label className="block mb-3">
+              <span className="text-sm text-slate-300 block mb-1">
+                Volume ({Math.round(settings.alarmVolume * 100)}%)
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={settings.alarmVolume}
+                onChange={(e) => onUpdate({ alarmVolume: parseFloat(e.target.value) })}
+                className="w-full accent-amber-500"
+              />
+            </label>
+
+            <label className="block mb-4">
+              <span className="text-sm text-slate-300 block mb-1">
+                Siren duration ({settings.alarmDurationSeconds}s)
+              </span>
+              <input
+                type="range"
+                min={5}
+                max={60}
+                step={1}
+                value={settings.alarmDurationSeconds}
+                onChange={(e) => onUpdate({ alarmDurationSeconds: parseInt(e.target.value, 10) || 5 })}
+                className="w-full accent-amber-500"
+              />
+            </label>
+
+            <div className="space-y-1">
+              {ALERT_EVENT_TYPES.map((type) => {
+                const eventSetting = settings.alarmEvents[type];
+                return (
+                  <div key={type} className="flex items-center justify-between gap-3">
+                    <span className="text-sm text-slate-300 flex-1">{EVENT_LABELS[type]}</span>
+                    <select
+                      value={eventSetting.tone}
+                      disabled={!eventSetting.sound}
+                      onChange={(e) => updateEventSetting(type, { tone: e.target.value as AlarmTone })}
+                      className="px-2 py-1.5 bg-white/5 border border-white/10 rounded-lg text-xs text-slate-300 focus:outline-none focus:border-amber-400/50 transition disabled:opacity-40"
+                    >
+                      {TONES.map((tone) => (
+                        <option key={tone} value={tone}>
+                          {tone}
+                        </option>
+                      ))}
+                    </select>
+                    <Toggle
+                      label=""
+                      checked={eventSetting.sound}
+                      onChange={(v) => updateEventSetting(type, { sound: v })}
+                    />
+                  </div>
+                );
+              })}
+            </div>
           </div>
+
         </div>
       </div>
     </div>

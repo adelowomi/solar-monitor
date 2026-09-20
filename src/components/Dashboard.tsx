@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Sun,
   BatteryCharging,
@@ -12,11 +12,16 @@ import {
   Settings,
   BarChart3,
   Sparkles,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
 import type { CurrentReadingDto, SunhouseClient } from "../api/sunhouse";
+import type { AlertEvent } from "../api/events";
 import type { UserSettings } from "../api/types";
 import { usePolling } from "../hooks/usePolling";
 import { useNotifications } from "../hooks/useNotifications";
+import { useAlertStream } from "../hooks/useAlertStream";
+import { createAlarm } from "../lib/alarm";
 import { deriveStateFromReading, deriveSummary } from "../lib/derive";
 import { fmtKw, fmtKwh } from "../lib/format";
 import { StatusPill } from "./ui/StatusPill";
@@ -28,21 +33,54 @@ import { SecondaryStats } from "./SecondaryStats";
 import { SettingsSheet } from "./SettingsSheet";
 import { InsightsPanel } from "./InsightsPanel";
 import { ConfigPanel } from "./ConfigPanel";
+import { ArmButton } from "./ArmButton";
+import { AlarmBanner } from "./AlarmBanner";
 
 const POLL_INTERVAL = 30_000;
 
 interface DashboardProps {
   client: SunhouseClient;
   apiBase: string;
+  apiKey: string;
   settings: UserSettings;
   onUpdateSettings: (patch: Partial<UserSettings>) => void;
 }
 
-export function Dashboard({ client, apiBase, settings, onUpdateSettings }: DashboardProps) {
+export function Dashboard({ client, apiBase, apiKey, settings, onUpdateSettings }: DashboardProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
-  const { permission, enabled, toggle, requestPermission } = useNotifications();
+  const { permission, enabled, toggle, requestPermission, notify } = useNotifications();
+
+  const alarm = useMemo(() => createAlarm(), []);
+  const [armed, setArmed] = useState(() => alarm.isArmed());
+  useEffect(() => alarm.onStateChange(setArmed), [alarm]);
+
+  const onAlertEvent = useCallback(
+    (e: AlertEvent) => notify(e.title, { body: e.body }),
+    [notify]
+  );
+
+  const { connected, activeAlert, dismiss } = useAlertStream({
+    apiBase,
+    apiKey,
+    settings,
+    alarm,
+    onEvent: onAlertEvent,
+  });
+
+  const handleArm = useCallback(async () => {
+    // Single click must do the whole gesture: unlock audio, ask for
+    // notification permission, and persist intent so a reload can tell the
+    // user they're silently disarmed instead of looking fine.
+    await alarm.unlock();
+    await requestPermission();
+    onUpdateSettings({ alarmArmIntent: true });
+  }, [alarm, requestPermission, onUpdateSettings]);
+
+  const handleTestAlarm = useCallback(() => {
+    alarm.play("siren", settings.alarmDurationSeconds * 1000, settings.alarmVolume);
+  }, [alarm, settings.alarmDurationSeconds, settings.alarmVolume]);
 
   const fetchCurrent = useCallback(async (): Promise<CurrentReadingDto> => client.current(), [client]);
 
@@ -51,6 +89,7 @@ export function Dashboard({ client, apiBase, settings, onUpdateSettings }: Dashb
   if (!reading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white px-6">
+        <AlarmBanner event={activeAlert} onDismiss={dismiss} />
         <div className="text-center">
           <RefreshCw className="w-6 h-6 mx-auto animate-spin text-amber-300" />
           <p className="mt-3 text-sm text-slate-400 font-light">
@@ -83,6 +122,7 @@ export function Dashboard({ client, apiBase, settings, onUpdateSettings }: Dashb
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white">
+      <AlarmBanner event={activeAlert} onDismiss={dismiss} />
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-40 right-1/4 w-[500px] h-[500px] bg-amber-500/5 rounded-full blur-3xl" />
         <div className="absolute -bottom-40 left-1/4 w-[500px] h-[500px] bg-emerald-500/5 rounded-full blur-3xl" />
@@ -102,6 +142,23 @@ export function Dashboard({ client, apiBase, settings, onUpdateSettings }: Dashb
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-medium ${
+                connected
+                  ? "bg-emerald-500/10 text-emerald-300"
+                  : "bg-red-500/15 text-red-300"
+              }`}
+              title={connected ? "Live alert stream connected" : "Alert stream disconnected — reconnecting"}
+            >
+              {connected ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
+            </span>
+            <ArmButton
+              armed={armed}
+              intent={settings.alarmArmIntent}
+              connected={connected}
+              onArm={handleArm}
+              onTest={handleTestAlarm}
+            />
             {permission === "granted" ? (
               <button
                 onClick={toggle}
@@ -255,6 +312,7 @@ export function Dashboard({ client, apiBase, settings, onUpdateSettings }: Dashb
         onClose={() => setSettingsOpen(false)}
         settings={settings}
         onUpdate={onUpdateSettings}
+        alarm={alarm}
       />
 
       <InsightsPanel open={insightsOpen} onClose={() => setInsightsOpen(false)} client={client} apiBase={apiBase} />
