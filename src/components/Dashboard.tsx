@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   Sun,
   BatteryCharging,
@@ -42,51 +42,11 @@ export function Dashboard({ client, apiBase, settings, onUpdateSettings }: Dashb
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
-  const { permission, enabled, toggle, requestPermission, notify } = useNotifications();
-
-  const prevGridOn = useRef<boolean | null>(null);
-  const prevSoc = useRef<number | null>(null);
-  const prevTemp = useRef<number | null>(null);
-  const prevFault = useRef<number | null>(null);
+  const { permission, enabled, toggle, requestPermission } = useNotifications();
 
   const fetchCurrent = useCallback(async (): Promise<CurrentReadingDto> => client.current(), [client]);
 
   const { data: reading, error, lastUpdate, refetch, refreshing } = usePolling(fetchCurrent, POLL_INTERVAL);
-
-  // Notifications: track transitions between polls.
-  useEffect(() => {
-    if (!reading || !enabled) return;
-    const s = deriveStateFromReading(reading, settings);
-
-    if (prevGridOn.current === false && s.gridOn && settings.alertGridRestored) {
-      notify("Grid restored", { body: "Mains power is back on." });
-    } else if (prevGridOn.current === true && !s.gridOn && settings.alertGridLost) {
-      notify("Grid lost", { body: "Mains power dropped. Running off battery/solar." });
-    }
-    if (
-      prevSoc.current !== null &&
-      prevSoc.current > settings.lowBatteryThreshold &&
-      s.soc <= settings.lowBatteryThreshold &&
-      settings.alertLowBattery
-    ) {
-      notify("Battery low", { body: `SOC dropped below ${settings.lowBatteryThreshold}%.` });
-    }
-    if (
-      prevTemp.current !== null &&
-      prevTemp.current < settings.highTempThreshold &&
-      s.heatSinkTemp >= settings.highTempThreshold &&
-      settings.alertHighTemp
-    ) {
-      notify("Inverter hot", { body: `Heat sink at ${s.heatSinkTemp}°C.` });
-    }
-    if (prevFault.current === 0 && s.faultId !== 0 && settings.alertFault) {
-      notify("System fault", { body: `Fault code #${s.faultId} reported.` });
-    }
-    prevGridOn.current = s.gridOn;
-    prevSoc.current = s.soc;
-    prevTemp.current = s.heatSinkTemp;
-    prevFault.current = s.faultId;
-  }, [reading, settings, enabled, notify]);
 
   if (!reading) {
     return (

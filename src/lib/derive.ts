@@ -103,8 +103,6 @@ export function deriveSummary(state: DerivedState, settings: UserSettings): Deri
   if (!s.gridOn && s.pvPower > s.loadPower && s.pvPower > POWER_EPSILON)
     return { tone: "good", message: "Solar is covering everything." };
   if (!s.gridOn && s.pvPower > POWER_EPSILON) return { tone: "warm", message: "Running on solar + battery." };
-  if (!s.gridOn && s.batteryDischarging && s.soc < settings.lowBatteryThreshold)
-    return { tone: "bad", message: `Grid is out — battery low at ${s.soc.toFixed(0)}%.` };
   if (!s.gridOn && s.batteryDischarging) {
     const hrs = s.batteryHoursLeft;
     const est = hrs ? ` (~${hrs.toFixed(1)}h left)` : "";

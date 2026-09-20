@@ -75,38 +75,6 @@ export function SettingsSheet({ open, onClose, settings, onUpdate }: SettingsShe
                 className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-xl text-white focus:outline-none focus:border-amber-400/50 transition tabular-nums"
               />
             </label>
-            <label className="block mb-3">
-              <span className="text-sm text-slate-300 block mb-1">
-                Low battery alert threshold (%)
-              </span>
-              <input
-                type="number"
-                min={5}
-                max={50}
-                step={1}
-                value={settings.lowBatteryThreshold}
-                onChange={(e) =>
-                  onUpdate({ lowBatteryThreshold: parseInt(e.target.value) || 20 })
-                }
-                className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-xl text-white focus:outline-none focus:border-amber-400/50 transition tabular-nums"
-              />
-            </label>
-            <label className="block">
-              <span className="text-sm text-slate-300 block mb-1">
-                High temp alert threshold (&deg;C)
-              </span>
-              <input
-                type="number"
-                min={40}
-                max={100}
-                step={1}
-                value={settings.highTempThreshold}
-                onChange={(e) =>
-                  onUpdate({ highTempThreshold: parseInt(e.target.value) || 70 })
-                }
-                className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-xl text-white focus:outline-none focus:border-amber-400/50 transition tabular-nums"
-              />
-            </label>
           </div>
 
           <div>
