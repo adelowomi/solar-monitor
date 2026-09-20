@@ -13,7 +13,11 @@ export class SseParser {
   private buffer = "";
 
   push(chunk: string): SseFrame[] {
-    this.buffer += chunk.replace(/\r\n/g, "\n");
+    this.buffer += chunk;
+    // Normalise across the whole buffer, never per chunk: a CRLF split across a
+    // chunk boundary would otherwise strand a \r inside a field value. Re-running
+    // this over the full buffer repairs the orphan once its \n arrives.
+    this.buffer = this.buffer.replace(/\r\n/g, "\n");
     const frames: SseFrame[] = [];
 
     let boundary = this.buffer.indexOf("\n\n");
@@ -24,6 +28,10 @@ export class SseParser {
       if (frame) frames.push(frame);
       boundary = this.buffer.indexOf("\n\n");
     }
+
+    // A stream that never terminates a frame must not grow the buffer forever.
+    const MAX_BUFFER = 1_000_000;
+    if (this.buffer.length > MAX_BUFFER) this.buffer = "";
 
     return frames;
   }
@@ -45,6 +53,8 @@ function parseFrame(raw: string): SseFrame | null {
     else if (field === "data") data.push(value);
   }
 
-  if (data.length === 0) return null;
+  // Keep id-only frames: dropping them would lose the id that Last-Event-ID
+  // resumption depends on. A comment-only frame still yields nothing.
+  if (data.length === 0 && id === undefined) return null;
   return { id, event, data: data.join("\n") };
 }

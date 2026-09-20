@@ -39,4 +39,10 @@ describe("SseParser", () => {
     const p = new SseParser();
     expect(p.push("data: one\ndata: two\n\n")[0].data).toBe("one\ntwo");
   });
+
+  it("handles a CRLF terminator split across chunks", () => {
+    const p = new SseParser();
+    expect(p.push("data: x\r")).toHaveLength(0);
+    expect(p.push("\n\r\n")).toEqual([{ id: undefined, event: undefined, data: "x" }]);
+  });
 });

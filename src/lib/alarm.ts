@@ -65,6 +65,9 @@ export function createAlarm(): Alarm {
     stop();
 
     const spec = TONES[tone] ?? TONES.siren;
+    // A pattern that cannot advance time would spin the scheduler forever.
+    if (spec.pattern.length === 0) return;
+    const MIN_SEGMENT_SECONDS = 0.01;
     const gain = ctx.createGain();
     gain.gain.value = 0;
     gain.connect(ctx.destination);
@@ -78,9 +81,10 @@ export function createAlarm(): Alarm {
     while (t < stopAt) {
       for (const [freq, secs] of spec.pattern) {
         if (t >= stopAt) break;
+        const step = Math.max(MIN_SEGMENT_SECONDS, secs);
         osc.frequency.setValueAtTime(freq || 0.0001, t);
         gain.gain.setValueAtTime(freq === 0 ? 0 : volume, t);
-        t += secs;
+        t += step;
       }
     }
     gain.gain.setValueAtTime(0, stopAt);
