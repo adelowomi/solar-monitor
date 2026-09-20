@@ -44,3 +44,19 @@ export function shouldSound(event: AlertEvent, settings: UserSettings): boolean 
   const age = Date.now() - new Date(event.occurredAt).getTime();
   return age <= REPLAY_FRESHNESS_MS;
 }
+
+/**
+ * Whether this surface should claim the event's id in the shared dedupe store.
+ *
+ * The store is device-wide and first-writer-wins, so a surface that will not
+ * actually alert must NOT claim the id — if it does, it suppresses the service
+ * worker's push and the device gets neither a siren nor a notification. Claim
+ * only what you will act on.
+ */
+export function shouldClaimEventId(
+  event: AlertEvent,
+  settings: UserSettings,
+  armed: boolean
+): boolean {
+  return armed && shouldSound(event, settings);
+}

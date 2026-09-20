@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SseParser } from "../lib/sse";
 import { markSeen } from "../lib/seen";
-import { parseAlertEvent, shouldSound, type AlertEvent } from "../api/events";
+import { parseAlertEvent, shouldClaimEventId, type AlertEvent } from "../api/events";
 import type { UserSettings } from "../api/types";
 import type { Alarm } from "../lib/alarm";
 
@@ -74,7 +74,7 @@ export function useAlertStream({ apiBase, apiKey, settings, alarm, onEvent }: Op
               const event = parseAlertEvent(frame.data);
               if (!event) continue;
 
-              const willSound = shouldSound(event, settingsRef.current) && alarm.isArmed();
+              const willSound = shouldClaimEventId(event, settingsRef.current, alarm.isArmed());
 
               // Claim the id ONLY if this surface will actually alert. The store is
               // device-wide and first-writer-wins, so a tab that stays silent must not
