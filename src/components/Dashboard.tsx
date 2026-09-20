@@ -58,6 +58,26 @@ export function Dashboard({ client, apiBase, apiKey, settings, onUpdateSettings 
   useEffect(() => alarm.onStateChange(setArmed), [alarm]);
   const [pushUnavailable, setPushUnavailable] = useState(false);
 
+  // pushUnavailable is otherwise only set inside handleArm, so after a reload a
+  // device whose push subscription has since been revoked shows no warning
+  // until the user re-arms. Check on mount too, whenever arming intent persists,
+  // so the degradation stays visible instead of silently disappearing.
+  useEffect(() => {
+    if (!settings.alarmArmIntent) return;
+    if (!("serviceWorker" in navigator)) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const reg = await navigator.serviceWorker.getRegistration();
+        const sub = await reg?.pushManager.getSubscription();
+        if (!cancelled) setPushUnavailable(!sub);
+      } catch {
+        if (!cancelled) setPushUnavailable(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [settings.alarmArmIntent]);
+
   const [devices, setDevices] = useState<PushDeviceDto[] | null>(null);
   const [devicesError, setDevicesError] = useState<string | null>(null);
 

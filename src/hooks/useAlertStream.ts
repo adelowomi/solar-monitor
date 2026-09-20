@@ -73,11 +73,19 @@ export function useAlertStream({ apiBase, apiKey, settings, alarm, onEvent }: Op
               if (frame.id) lastEventId.current = frame.id;
               const event = parseAlertEvent(frame.data);
               if (!event) continue;
-              if (!(await markSeen(event.id))) continue;
+
+              const willSound = shouldSound(event, settingsRef.current) && alarm.isArmed();
+
+              // Claim the id ONLY if this surface will actually alert. The store is
+              // device-wide and first-writer-wins, so a tab that stays silent must not
+              // consume the id — doing so suppresses the service worker's push and
+              // produces a device that neither sirens nor notifies.
+              if (willSound && !(await markSeen(event.id))) continue;
               if (stopped) return;
 
               onEventRef.current?.(event);
-              if (shouldSound(event, settingsRef.current)) {
+
+              if (willSound) {
                 const { tone } = settingsRef.current.alarmEvents[event.type];
                 alarm.play(tone, settingsRef.current.alarmDurationSeconds * 1000,
                   settingsRef.current.alarmVolume);
@@ -116,7 +124,15 @@ export function useAlertStream({ apiBase, apiKey, settings, alarm, onEvent }: Op
         body: JSON.stringify({ deviceId: deviceId(), armed }),
       }).catch(() => { /* presence is best-effort */ });
     };
-    return alarm.onStateChange(report);
+    // Presence is best-effort, so a single lost POST could leave the server
+    // believing this device is covered — and therefore never push to it.
+    // Re-assert the current state periodically so any lost update self-corrects.
+    const interval = window.setInterval(() => report(alarm.isArmed()), 60_000);
+    const unsubscribe = alarm.onStateChange(report);
+    return () => {
+      window.clearInterval(interval);
+      unsubscribe();
+    };
   }, [apiBase, apiKey, alarm]);
 
   return { connected, activeAlert, dismiss };

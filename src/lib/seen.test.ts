@@ -25,4 +25,13 @@ describe("markSeen", () => {
 
     globalThis.indexedDB = original;
   });
+
+  it("leaves an id unclaimed when the surface will not alert", async () => {
+    // A disarmed tab must NOT consume the id: the service worker still has to be
+    // able to claim it and show a notification, or the device gets nothing at all.
+    const id = "evt-disarmed";
+    const willSound = false;
+    if (willSound) await markSeen(id);
+    expect(await markSeen(id)).toBe(true); // the other surface can still claim it
+  });
 });
