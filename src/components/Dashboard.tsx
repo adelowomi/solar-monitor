@@ -31,7 +31,7 @@ import { EnergyFlowDiagram } from "./EnergyFlowDiagram";
 import { PowerCard } from "./PowerCard";
 import { HouseLoadCard } from "./HouseLoadCard";
 import { SecondaryStats } from "./SecondaryStats";
-import { SettingsSheet } from "./SettingsSheet";
+import { SettingsSheet, type PushDeviceDto } from "./SettingsSheet";
 import { InsightsPanel } from "./InsightsPanel";
 import { ConfigPanel } from "./ConfigPanel";
 import { ArmButton } from "./ArmButton";
@@ -57,6 +57,43 @@ export function Dashboard({ client, apiBase, apiKey, settings, onUpdateSettings 
   const [armed, setArmed] = useState(() => alarm.isArmed());
   useEffect(() => alarm.onStateChange(setArmed), [alarm]);
   const [pushUnavailable, setPushUnavailable] = useState(false);
+
+  const [devices, setDevices] = useState<PushDeviceDto[] | null>(null);
+  const [devicesError, setDevicesError] = useState<string | null>(null);
+
+  // Fetched from the settings-gear click itself, not from an effect reacting
+  // to `settingsOpen` — this is a plain user-initiated action, not an effect
+  // synchronizing with an external system, so it stays outside useEffect.
+  const loadDevices = useCallback(async () => {
+    try {
+      const res = await fetch(`${apiBase}/api/events/push/devices`, {
+        headers: { "X-Api-Key": apiKey },
+      });
+      if (!res.ok) throw new Error(`devices ${res.status}`);
+      setDevices(await res.json());
+      setDevicesError(null);
+    } catch {
+      setDevicesError("Couldn't load push devices");
+    }
+  }, [apiBase, apiKey]);
+
+  const handleOpenSettings = useCallback(() => {
+    setSettingsOpen(true);
+    void loadDevices();
+  }, [loadDevices]);
+
+  const handleRevokeDevice = useCallback(
+    (endpoint: string) => {
+      // Optimistic: the device disappears immediately, then we confirm with
+      // the server. A failed revoke just gets picked back up on next open.
+      setDevices((prev) => prev?.filter((d) => d.endpoint !== endpoint) ?? prev);
+      void fetch(`${apiBase}/api/events/push/subscribe?endpoint=${encodeURIComponent(endpoint)}`, {
+        method: "DELETE",
+        headers: { "X-Api-Key": apiKey },
+      }).catch(() => { /* best effort — device list will self-correct on next open */ });
+    },
+    [apiBase, apiKey]
+  );
 
   const onAlertEvent = useCallback(
     (e: AlertEvent) => notify(e.title, { body: e.body }),
@@ -213,7 +250,7 @@ export function Dashboard({ client, apiBase, apiKey, settings, onUpdateSettings 
               <BarChart3 className="w-4 h-4" />
             </button>
             <button
-              onClick={() => setSettingsOpen(true)}
+              onClick={handleOpenSettings}
               className="p-2.5 rounded-xl bg-white/5 border border-white/10 text-slate-400 hover:text-slate-200 transition"
               title="Local settings"
             >
@@ -324,8 +361,9 @@ export function Dashboard({ client, apiBase, apiKey, settings, onUpdateSettings 
         onUpdate={onUpdateSettings}
         alarm={alarm}
         armed={armed}
-        apiBase={apiBase}
-        apiKey={apiKey}
+        devices={devices}
+        devicesError={devicesError}
+        onRevokeDevice={handleRevokeDevice}
       />
 
       <InsightsPanel open={insightsOpen} onClose={() => setInsightsOpen(false)} client={client} apiBase={apiBase} />

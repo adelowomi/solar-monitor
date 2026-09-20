@@ -1,8 +1,9 @@
 // Mirrored in public/sw.js — a service worker cannot import a bundled
 // module, so the dedupe logic there is a hand-kept copy of this file. Both
-// MUST use the same DB_NAME, STORE and semantics: drift here means a push
-// notification and its replayed SSE twin both alarm, which is exactly what
-// this machinery exists to prevent.
+// MUST use the same DB_NAME, STORE, DB version, MAX_AGE_MS and semantics
+// (see seen-idb.test.ts, which fails if these drift): drift here means a
+// push notification and its replayed SSE twin both alarm, which is exactly
+// what this machinery exists to prevent.
 const DB_NAME = "sunhouse-alerts";
 const STORE = "seen";
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;

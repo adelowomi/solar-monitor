@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
 import { X, Volume2, Smartphone, Trash2 } from "lucide-react";
 import { ALERT_EVENT_TYPES, type AlarmTone, type AlertEventType, type UserSettings } from "../api/types";
 import type { Alarm } from "../lib/alarm";
 
 /** Shape of GET /api/events/push/devices rows (not part of the generated
  * OpenAPI client — this endpoint predates a gen-api refresh). */
-interface PushDeviceDto {
+export interface PushDeviceDto {
   id: number;
   deviceId: string;
   label: string | null;
@@ -30,8 +29,14 @@ interface SettingsSheetProps {
   alarm: Alarm;
   /** Whether `alarm`'s AudioContext is actually unlocked right now. */
   armed: boolean;
-  apiBase: string;
-  apiKey: string;
+  /**
+   * Push device list state, owned and fetched by Dashboard (triggered from
+   * the settings-gear click, not from an effect here) so this component has
+   * no data fetching of its own to keep in sync with `open`.
+   */
+  devices: PushDeviceDto[] | null;
+  devicesError: string | null;
+  onRevokeDevice: (endpoint: string) => void;
 }
 
 const TONES: AlarmTone[] = ["siren", "chime", "pulse", "alert"];
@@ -74,44 +79,9 @@ function Toggle({
   );
 }
 
-export function SettingsSheet({ open, onClose, settings, onUpdate, alarm, armed, apiBase, apiKey }: SettingsSheetProps) {
-  const [devices, setDevices] = useState<PushDeviceDto[] | null>(null);
-  const [devicesError, setDevicesError] = useState<string | null>(null);
-
-  const loadDevices = useCallback(async () => {
-    try {
-      const res = await fetch(`${apiBase}/api/events/push/devices`, {
-        headers: { "X-Api-Key": apiKey },
-      });
-      if (!res.ok) throw new Error(`devices ${res.status}`);
-      setDevices(await res.json());
-      setDevicesError(null);
-    } catch {
-      setDevicesError("Couldn't load push devices");
-    }
-  }, [apiBase, apiKey]);
-
-  useEffect(() => {
-    if (open) void loadDevices();
-  }, [open, loadDevices]);
-
-  const revokeDevice = useCallback(
-    async (endpoint: string) => {
-      // Optimistic: the device disappears immediately, then we confirm with
-      // the server. A failed revoke just gets picked back up on next open.
-      setDevices((prev) => prev?.filter((d) => d.endpoint !== endpoint) ?? prev);
-      try {
-        await fetch(`${apiBase}/api/events/push/subscribe?endpoint=${encodeURIComponent(endpoint)}`, {
-          method: "DELETE",
-          headers: { "X-Api-Key": apiKey },
-        });
-      } catch {
-        /* best effort — device list will self-correct on next open */
-      }
-    },
-    [apiBase, apiKey]
-  );
-
+export function SettingsSheet({
+  open, onClose, settings, onUpdate, alarm, armed, devices, devicesError, onRevokeDevice,
+}: SettingsSheetProps) {
   if (!open) return null;
 
   const updateEventSetting = (type: AlertEventType, patch: Partial<{ sound: boolean; tone: AlarmTone }>) => {
@@ -281,7 +251,7 @@ export function SettingsSheet({ open, onClose, settings, onUpdate, alarm, armed,
                     </div>
                     <button
                       type="button"
-                      onClick={() => void revokeDevice(d.endpoint)}
+                      onClick={() => onRevokeDevice(d.endpoint)}
                       className="p-1.5 rounded-lg text-slate-400 hover:text-red-300 hover:bg-red-500/10 transition shrink-0"
                       title="Revoke push access"
                     >
