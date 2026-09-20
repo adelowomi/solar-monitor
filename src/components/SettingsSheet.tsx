@@ -1,6 +1,19 @@
-import { X, Volume2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { X, Volume2, Smartphone, Trash2 } from "lucide-react";
 import { ALERT_EVENT_TYPES, type AlarmTone, type AlertEventType, type UserSettings } from "../api/types";
 import type { Alarm } from "../lib/alarm";
+
+/** Shape of GET /api/events/push/devices rows (not part of the generated
+ * OpenAPI client — this endpoint predates a gen-api refresh). */
+interface PushDeviceDto {
+  id: number;
+  deviceId: string;
+  label: string | null;
+  userAgent: string | null;
+  lastSeenAt: string;
+  enabled: boolean;
+  endpoint: string;
+}
 
 interface SettingsSheetProps {
   open: boolean;
@@ -17,6 +30,8 @@ interface SettingsSheetProps {
   alarm: Alarm;
   /** Whether `alarm`'s AudioContext is actually unlocked right now. */
   armed: boolean;
+  apiBase: string;
+  apiKey: string;
 }
 
 const TONES: AlarmTone[] = ["siren", "chime", "pulse", "alert"];
@@ -59,7 +74,44 @@ function Toggle({
   );
 }
 
-export function SettingsSheet({ open, onClose, settings, onUpdate, alarm, armed }: SettingsSheetProps) {
+export function SettingsSheet({ open, onClose, settings, onUpdate, alarm, armed, apiBase, apiKey }: SettingsSheetProps) {
+  const [devices, setDevices] = useState<PushDeviceDto[] | null>(null);
+  const [devicesError, setDevicesError] = useState<string | null>(null);
+
+  const loadDevices = useCallback(async () => {
+    try {
+      const res = await fetch(`${apiBase}/api/events/push/devices`, {
+        headers: { "X-Api-Key": apiKey },
+      });
+      if (!res.ok) throw new Error(`devices ${res.status}`);
+      setDevices(await res.json());
+      setDevicesError(null);
+    } catch {
+      setDevicesError("Couldn't load push devices");
+    }
+  }, [apiBase, apiKey]);
+
+  useEffect(() => {
+    if (open) void loadDevices();
+  }, [open, loadDevices]);
+
+  const revokeDevice = useCallback(
+    async (endpoint: string) => {
+      // Optimistic: the device disappears immediately, then we confirm with
+      // the server. A failed revoke just gets picked back up on next open.
+      setDevices((prev) => prev?.filter((d) => d.endpoint !== endpoint) ?? prev);
+      try {
+        await fetch(`${apiBase}/api/events/push/subscribe?endpoint=${encodeURIComponent(endpoint)}`, {
+          method: "DELETE",
+          headers: { "X-Api-Key": apiKey },
+        });
+      } catch {
+        /* best effort — device list will self-correct on next open */
+      }
+    },
+    [apiBase, apiKey]
+  );
+
   if (!open) return null;
 
   const updateEventSetting = (type: AlertEventType, patch: Partial<{ sound: boolean; tone: AlarmTone }>) => {
@@ -190,6 +242,55 @@ export function SettingsSheet({ open, onClose, settings, onUpdate, alarm, armed 
                 );
               })}
             </div>
+          </div>
+
+          <div>
+            <h3 className="text-xs uppercase tracking-widest text-slate-500 mb-3 font-medium">
+              Push devices
+            </h3>
+            <p className="text-xs text-slate-500 mb-3">
+              Devices registered to receive a push notification when no tab is
+              armed to sound the siren directly.
+            </p>
+            {devicesError && (
+              <p className="text-xs text-red-300 mb-2">{devicesError}</p>
+            )}
+            {devices === null && !devicesError && (
+              <p className="text-xs text-slate-500">Loading…</p>
+            )}
+            {devices?.length === 0 && (
+              <p className="text-xs text-slate-500">No devices registered yet.</p>
+            )}
+            {devices && devices.length > 0 && (
+              <ul className="space-y-2">
+                {devices.map((d) => (
+                  <li
+                    key={d.endpoint}
+                    className="flex items-center justify-between gap-3 rounded-xl bg-white/5 border border-white/10 px-3 py-2"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Smartphone className="w-4 h-4 text-slate-400 shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-sm text-slate-200 truncate">
+                          {d.label || d.userAgent || "Unknown device"}
+                        </p>
+                        <p className="text-[11px] text-slate-500">
+                          Last seen {new Date(d.lastSeenAt).toLocaleString()}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void revokeDevice(d.endpoint)}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-red-300 hover:bg-red-500/10 transition shrink-0"
+                      title="Revoke push access"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
 
         </div>

@@ -20,8 +20,9 @@ import type { AlertEvent } from "../api/events";
 import type { UserSettings } from "../api/types";
 import { usePolling } from "../hooks/usePolling";
 import { useNotifications } from "../hooks/useNotifications";
-import { useAlertStream } from "../hooks/useAlertStream";
+import { useAlertStream, deviceId } from "../hooks/useAlertStream";
 import { createAlarm } from "../lib/alarm";
+import { registerPush } from "../lib/push";
 import { deriveStateFromReading, deriveSummary } from "../lib/derive";
 import { fmtKw, fmtKwh } from "../lib/format";
 import { StatusPill } from "./ui/StatusPill";
@@ -55,6 +56,7 @@ export function Dashboard({ client, apiBase, apiKey, settings, onUpdateSettings 
   const alarm = useMemo(() => createAlarm(), []);
   const [armed, setArmed] = useState(() => alarm.isArmed());
   useEffect(() => alarm.onStateChange(setArmed), [alarm]);
+  const [pushUnavailable, setPushUnavailable] = useState(false);
 
   const onAlertEvent = useCallback(
     (e: AlertEvent) => notify(e.title, { body: e.body }),
@@ -71,12 +73,19 @@ export function Dashboard({ client, apiBase, apiKey, settings, onUpdateSettings 
 
   const handleArm = useCallback(async () => {
     // Single click must do the whole gesture: unlock audio, ask for
-    // notification permission, and persist intent so a reload can tell the
-    // user they're silently disarmed instead of looking fine.
+    // notification permission, register for push (reach when no tab is
+    // armed), and persist intent so a reload can tell the user they're
+    // silently disarmed instead of looking fine.
     await alarm.unlock();
     await requestPermission();
     onUpdateSettings({ alarmArmIntent: true });
-  }, [alarm, requestPermission, onUpdateSettings]);
+    // Push can never be loud — the in-tab siren above is the loud path.
+    // This only extends reach to devices with no armed tab; if it fails,
+    // arming still succeeds and we surface the degradation instead of
+    // hiding it.
+    const ok = await registerPush(apiBase, apiKey, deviceId());
+    setPushUnavailable(!ok);
+  }, [alarm, requestPermission, onUpdateSettings, apiBase, apiKey]);
 
   const handleTestAlarm = useCallback(() => {
     alarm.play("siren", settings.alarmDurationSeconds * 1000, settings.alarmVolume);
@@ -158,6 +167,7 @@ export function Dashboard({ client, apiBase, apiKey, settings, onUpdateSettings 
               connected={connected}
               onArm={handleArm}
               onTest={handleTestAlarm}
+              pushUnavailable={pushUnavailable}
             />
             {permission === "granted" ? (
               <button
@@ -314,6 +324,8 @@ export function Dashboard({ client, apiBase, apiKey, settings, onUpdateSettings 
         onUpdate={onUpdateSettings}
         alarm={alarm}
         armed={armed}
+        apiBase={apiBase}
+        apiKey={apiKey}
       />
 
       <InsightsPanel open={insightsOpen} onClose={() => setInsightsOpen(false)} client={client} apiBase={apiBase} />
