@@ -30,6 +30,8 @@ export function useAlertStream({ apiBase, apiKey, settings, alarm, onEvent }: Op
   const lastEventId = useRef<string | null>(null);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+  const onEventRef = useRef(onEvent);
+  onEventRef.current = onEvent;
 
   const dismiss = useCallback(() => {
     alarm.stop();
@@ -43,6 +45,9 @@ export function useAlertStream({ apiBase, apiKey, settings, alarm, onEvent }: Op
 
     async function connect() {
       while (!stopped) {
+        let connectedAt = 0;
+        let sawData = false;
+
         try {
           const url = new URL(`${apiBase}/api/events/stream`);
           url.searchParams.set("deviceId", deviceId());
@@ -55,7 +60,7 @@ export function useAlertStream({ apiBase, apiKey, settings, alarm, onEvent }: Op
           if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
 
           setConnected(true);
-          attempt = 0;
+          connectedAt = Date.now();
 
           const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
           const parser = new SseParser();
@@ -63,13 +68,15 @@ export function useAlertStream({ apiBase, apiKey, settings, alarm, onEvent }: Op
           for (;;) {
             const { value, done } = await reader.read();
             if (done) break;
+            sawData = true;
             for (const frame of parser.push(value)) {
               if (frame.id) lastEventId.current = frame.id;
               const event = parseAlertEvent(frame.data);
               if (!event) continue;
               if (!(await markSeen(event.id))) continue;
+              if (stopped) return;
 
-              onEvent?.(event);
+              onEventRef.current?.(event);
               if (shouldSound(event, settingsRef.current)) {
                 const { tone } = settingsRef.current.alarmEvents[event.type];
                 alarm.play(tone, settingsRef.current.alarmDurationSeconds * 1000,
@@ -82,6 +89,13 @@ export function useAlertStream({ apiBase, apiKey, settings, alarm, onEvent }: Op
           if (stopped) return;
         }
 
+        // Only treat this as a healthy connection once it actually delivered
+        // something, or stayed open a while. A server that accepts and instantly
+        // closes (or drops mid-stream) must still escalate the backoff instead
+        // of spinning. Runs whether the loop above ended normally or via the
+        // catch above.
+        if (sawData || (connectedAt > 0 && Date.now() - connectedAt > 10_000)) attempt = 0;
+
         setConnected(false);
         // Backoff 1s -> 30s with jitter.
         const delay = Math.min(30_000, 1_000 * 2 ** attempt++) * (0.5 + Math.random() / 2);
@@ -91,7 +105,7 @@ export function useAlertStream({ apiBase, apiKey, settings, alarm, onEvent }: Op
 
     void connect();
     return () => { stopped = true; controller.abort(); };
-  }, [apiBase, apiKey, alarm, onEvent]);
+  }, [apiBase, apiKey, alarm]);
 
   // Report arming changes so the server knows whether to fall back to push.
   useEffect(() => {

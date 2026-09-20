@@ -313,6 +313,7 @@ export function Dashboard({ client, apiBase, apiKey, settings, onUpdateSettings 
         settings={settings}
         onUpdate={onUpdateSettings}
         alarm={alarm}
+        armed={armed}
       />
 
       <InsightsPanel open={insightsOpen} onClose={() => setInsightsOpen(false)} client={client} apiBase={apiBase} />

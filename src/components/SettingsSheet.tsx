@@ -15,6 +15,8 @@ interface SettingsSheetProps {
    * would silently produce no sound.
    */
   alarm: Alarm;
+  /** Whether `alarm`'s AudioContext is actually unlocked right now. */
+  armed: boolean;
 }
 
 const TONES: AlarmTone[] = ["siren", "chime", "pulse", "alert"];
@@ -57,7 +59,7 @@ function Toggle({
   );
 }
 
-export function SettingsSheet({ open, onClose, settings, onUpdate, alarm }: SettingsSheetProps) {
+export function SettingsSheet({ open, onClose, settings, onUpdate, alarm, armed }: SettingsSheetProps) {
   if (!open) return null;
 
   const updateEventSetting = (type: AlertEventType, patch: Partial<{ sound: boolean; tone: AlarmTone }>) => {
@@ -107,22 +109,29 @@ export function SettingsSheet({ open, onClose, settings, onUpdate, alarm }: Sett
           </div>
 
           <div>
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center justify-between mb-1">
               <h3 className="text-xs uppercase tracking-widest text-slate-500 font-medium">
                 Alarm
               </h3>
               <button
                 type="button"
+                disabled={!armed}
                 onClick={() =>
                   alarm.play("siren", settings.alarmDurationSeconds * 1000, settings.alarmVolume)
                 }
-                className="inline-flex items-center gap-1.5 rounded-full bg-white/5 border border-white/10 px-3 py-1 text-xs text-slate-300 hover:bg-white/10 transition"
-                title="Requires the alarm to already be armed (see the header button)"
+                className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition ${
+                  armed
+                    ? "bg-white/5 border-white/10 text-slate-300 hover:bg-white/10"
+                    : "bg-white/5 border-white/10 text-slate-600 opacity-50 cursor-not-allowed"
+                }`}
               >
                 <Volume2 className="w-3.5 h-3.5" />
                 Test alarm
               </button>
             </div>
+            <p className="text-xs text-amber-200/70 mb-3 min-h-[1rem]">
+              {!armed && "Arm the alarm from the header first — testing is disabled until then."}
+            </p>
 
             <label className="block mb-3">
               <span className="text-sm text-slate-300 block mb-1">

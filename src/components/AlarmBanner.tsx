@@ -25,8 +25,10 @@ export function AlarmBanner({ event, onDismiss }: AlarmBannerProps) {
   useEffect(() => {
     if (!event) return;
 
+    const existing = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    const createdByUs = !existing;
     const link =
-      document.querySelector<HTMLLinkElement>('link[rel="icon"]') ??
+      existing ??
       (() => {
         const el = document.createElement("link");
         el.rel = "icon";
@@ -35,6 +37,8 @@ export function AlarmBanner({ event, onDismiss }: AlarmBannerProps) {
       })();
 
     originalTitle.current = document.title;
+    // null when the page had no favicon link at all — distinct from "" which
+    // would mean an empty-but-present href.
     originalIcon.current = link.getAttribute("href");
     link.setAttribute("href", RED_FAVICON);
 
@@ -53,7 +57,15 @@ export function AlarmBanner({ event, onDismiss }: AlarmBannerProps) {
       window.clearInterval(flash);
       window.removeEventListener("keydown", onKey);
       document.title = originalTitle.current;
-      if (originalIcon.current) link.setAttribute("href", originalIcon.current);
+      if (createdByUs) {
+        // We made this <link> ourselves — remove it rather than leaving a
+        // half-restored element with the red icon still showing.
+        link.remove();
+      } else if (originalIcon.current !== null) {
+        link.setAttribute("href", originalIcon.current);
+      } else {
+        link.removeAttribute("href");
+      }
     };
   }, [event, onDismiss]);
 
